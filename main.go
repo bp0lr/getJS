@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+	"crypto/tls"
+	"net"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/logrusorgru/aurora"
@@ -52,29 +55,57 @@ func Error(l logger, msg string, err error) {
 	l.Error(msg, err)
 }
 
+
+
 var output logger
 var au aurora.Aurora
 
+var (
+	workersArg	      int
+	timeOutArg		  int
+	HeaderArg         []string
+	urlArg            string
+	statusListArg     string
+	proxyArg          string
+	fingerPrintArg    string
+	outputFileArg     string
+	queryArg          string
+	inputFileArg	  string
+	verboseArg        bool
+	followRedirectArg bool
+	useRandomAgentArg bool
+	testHTTPArg       bool
+	allInArg		  bool
+	resolveArg		  bool
+	completeArg		  bool
+	noColorsArg		  bool
+	saveArg			  bool
+)
+
+
 func main() {
-	urlArg := flag.StringP("url", "u", "", "The url to get the javascript sources from")
-	outputFileArg := flag.StringP("output", "o", "", "Output file to save the results to")
-	inputFileArg := flag.StringP("input", "i", "", "Input file with urls")
-	HeaderArg := flag.StringArrayP("header", "H", nil, "Any HTTP headers(-H \"Authorization:Bearer token\")")
-	resolveArg := flag.BoolP("resolve", "r", true, "Output only existing files")
-	completeArg := flag.BoolP("complete", "c", true, "Complete the url. e.g. append the domain to the path")
-	verboseArg := flag.BoolP("verbose", "v", false, "Display info of what is going on")
-	noColorsArg := flag.BoolP("nocolors", "n", false, "Enable or disable colors")
-	saveArg := flag.BoolP("save", "s", false, "Save the scripts to files")
+	flag.StringVarP(&urlArg, "url", "u", "", "The url to get the javascript sources from")
+	flag.StringVarP(&outputFileArg, "output", "o", "", "Output file to save the results to")
+	flag.StringVarP(&inputFileArg, "input", "i", "", "Input file with urls")
+	flag.StringVarP(&proxyArg, "proxy", "p", "", "Add a HTTP proxy")	
+	flag.StringArrayVarP(&HeaderArg, "header", "H", nil, "Any HTTP headers(-H \"Authorization:Bearer token\")")
+	flag.BoolVarP(&resolveArg, "resolve", "r", true, "Output only existing files")
+	flag.BoolVarP(&completeArg, "complete", "c", true, "Complete the url. e.g. append the domain to the path")
+	flag.BoolVarP(&verboseArg, "verbose", "v", false, "Display info of what is going on")
+	flag.BoolVarP(&noColorsArg, "nocolors", "n", false, "Enable or disable colors")
+	flag.BoolVarP(&saveArg, "save", "s", false, "Save the scripts to files")
+	flag.BoolVarP(&followRedirectArg, "follow-redirect", "f", false, "Follow redirects (Default: false)")
+	
 	flag.Parse()
 
-	au = aurora.NewAurora(!*noColorsArg)
+	au = aurora.NewAurora(!noColorsArg)
 
 	var urls []string
 	var allSources []string
 
 	output = silent{}
 
-	if *verboseArg {
+	if verboseArg {
 		output = verbose{}
 	}
 
@@ -96,18 +127,18 @@ func main() {
 		}
 	}
 
-	if *inputFileArg != "" {
-		lines, err := readLines(*inputFileArg)
+	if inputFileArg != "" {
+		lines, err := readLines(inputFileArg)
 		if err != nil {
 			output.Error("[!] Couldn't read from input file", err)
 		}
-		output.Log("[+] Set url file to " + *inputFileArg)
+		output.Log("[+] Set url file to " + inputFileArg)
 		urls = append(urls, lines...)
 	}
 
-	if *urlArg != "" {
-		output.Log("[+] Set url to " + *urlArg)
-		urls = append(urls, *urlArg)
+	if urlArg != "" {
+		output.Log("[+] Set url to " + urlArg)
+		urls = append(urls, urlArg)
 	}
 
 	if len(urls) == 0 {
@@ -115,25 +146,25 @@ func main() {
 		os.Exit(3)
 	}
 
-	if *resolveArg && !*completeArg {
+	if resolveArg && !completeArg {
 		output.Error("[!] Resolve can only be used in combination with -complete", nil)
 		os.Exit(3)
 	}
 
-	DomainFolder, err := url.Parse(*urlArg)
+	DomainFolder, err := url.Parse(urlArg)
 
 	for _, e := range urls {
 		var sourcesBak []string
 		var completedSuccessfully = true
 		output.Log("[+] Getting sources from " + e)
 
-		sources, err := getScriptSrc(e, *HeaderArg, *saveArg, DomainFolder.Host)
+		sources, err := getScriptSrc(e, HeaderArg, saveArg, DomainFolder.Host)
 
 		if err != nil {
 			output.Error("[!] Couldn't get sources from "+e, err)
 		}
 
-		if *completeArg {
+		if completeArg {
 			output.Log("[+] Completing URLs")
 			sourcesBak = sources
 			sources, err = completeUrls(sources, e)
@@ -145,11 +176,11 @@ func main() {
 			}
 		}
 
-		if *resolveArg && *completeArg {
+		if resolveArg && completeArg {
 			if completedSuccessfully {
 				output.Log("[+] Resolving files")
 				sourcesBak = sources
-				sources, err = resolveUrls(sources, *saveArg, DomainFolder.Host)
+				sources, err = resolveUrls(sources, saveArg, DomainFolder.Host)
 				if err != nil {
 					output.Error("[!] Couldn't resolve URLs", err)
 					sources = sourcesBak
@@ -157,7 +188,7 @@ func main() {
 			} else {
 				output.Error("[!] Couldn't resolve URLs", nil)
 			}
-		} else if *resolveArg {
+		} else if resolveArg {
 			output.Error("[!] Resolve can only be used in combination with -complete", nil)
 
 		}
@@ -166,17 +197,17 @@ func main() {
 			fmt.Println(i)
 		}
 
-		if *outputFileArg != "" {
+		if outputFileArg != "" {
 			allSources = append(allSources, sources...)
 		}
 	}
 
 	// Save to file
-	if *outputFileArg != "" {
-		output.Log("[+] Saving output to " + *outputFileArg)
-		err := saveToFile(allSources, *outputFileArg)
+	if outputFileArg != "" {
+		output.Log("[+] Saving output to " + outputFileArg)
+		err := saveToFile(allSources, outputFileArg)
 		if err != nil {
-			output.Error("[!] Couldn't save to output file "+*outputFileArg, err)
+			output.Error("[!] Couldn't save to output file "+outputFileArg, err)
 		}
 	}
 
@@ -278,7 +309,8 @@ func getScriptSrc(url string, headers []string, saveArg bool, SaveFolder string)
 		}
 	}
 
-	client := new(http.Client)
+	//client := new(http.Client)
+	client := newClient()
 	res, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
@@ -377,4 +409,35 @@ func completeUrls(s []string, mainUrl string) ([]string, error) {
 		}
 	}
 	return s, nil
+}
+
+
+func newClient() *http.Client {
+	tr := &http.Transport{
+		MaxIdleConns:    30,
+		IdleConnTimeout: time.Second,
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		DialContext: (&net.Dialer{
+			Timeout: time.Second * time.Duration(timeOutArg),
+		}).DialContext,
+	}
+
+	if proxyArg != "" {
+		if p, err := url.Parse(proxyArg); err == nil {
+			tr.Proxy = http.ProxyURL(p)
+		}
+	}
+
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   time.Second * time.Duration(timeOutArg),
+	}
+
+	if !followRedirectArg {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+
+	return client
 }
