@@ -309,7 +309,6 @@ func getScriptSrc(url string, headers []string, saveArg bool, SaveFolder string)
 		}
 	}
 
-	//client := new(http.Client)
 	client := newClient()
 	res, err := client.Do(req)
 	if err != nil {
@@ -368,29 +367,37 @@ func readLines(path string) ([]string, error) {
 
 func resolveUrls(s []string, saveArg bool, SaveFolder string) ([]string, error) {
 
-	for i := len(s) - 1; i >= 0; i-- {
-
-		resp, err := http.Get(s[i])
+	var validLinks []string
+	for _,link:= range s{	
+		
+		req, err := http.NewRequest("GET", link, nil)
+		if err != nil {
+			output.Error("[-] Couldn't generate request URL", err)
+			continue
+		}
+		
+		client := newClient()
+		resp, err := client.Do(req)
+		
 		if err != nil {
 			output.Error("[!] Couldn't resolve URL", err)
-			s = append(s[:i], s[i+1:]...)
-		}
-
-		output.Log("[==>] " + s[i] + "[" + strconv.Itoa(resp.StatusCode) + "]")
-
-		if resp.StatusCode != 200 && resp.StatusCode != 304 {
-			s = append(s[:i], s[i+1:]...)
+			continue
 		}
 
 		if resp != nil {
-			if resp.StatusCode == 200 && saveArg {
-				saveJS(s[i], resp.Body, SaveFolder)
+			output.Log("[==>] " + link + "[" + strconv.Itoa(resp.StatusCode) + "]")
+		
+			if (resp.StatusCode == 200 || resp.StatusCode == 304){
+				validLinks = append(validLinks, link)
+				if saveArg {
+					saveJS(link, resp.Body, SaveFolder)
+				} 
 			}
-
 			resp.Body.Close()
 		}
 	}
-	return s, nil
+
+	return validLinks, nil
 }
 
 func completeUrls(s []string, mainUrl string) ([]string, error) {
