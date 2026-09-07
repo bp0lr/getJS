@@ -23,13 +23,13 @@ go build -o getJS.exe .
 
 `go install .` installs into your Go binary directory, which must be on PATH.
 
-Install the default branch with:
+Install the release with:
 
 ```sh
-go install github.com/bp0lr/getJS@master
+go install github.com/bp0lr/getJS@v0.1.0
 ```
 
-CI builds binaries for Linux, Windows, and macOS. Download them from successful runs in [GitHub Actions](https://github.com/bp0lr/getJS/actions/workflows/ci.yml).
+Use `@latest` for the newest tagged release, or `@master` for the development branch. Download packaged Linux, Windows, and macOS binaries (amd64 and arm64) from [Releases](https://github.com/bp0lr/getJS/releases). Each archive includes licenses; verify its SHA-256 against `SHA256SUMS`. CI also keeps development binaries in successful [GitHub Actions runs](https://github.com/bp0lr/getJS/actions/workflows/ci.yml).
 
 ## Quick start
 
@@ -211,13 +211,13 @@ Incremental manifests are staged and replace the previous manifest only when the
 
 ## Development
 
-### Implementation sequence for v0.1.0
+### Implemented in v0.1.0
 
-1. Identify installed versions and local Git builds automatically; prepare the first versioned release.
-2. Replace batch barriers with continuous script workers, preserving ordered output and bounded lookahead.
-3. Add portable file publication for destinations without hard-link support.
-4. Reuse verified downloads with conditional HTTP requests and persistent validators.
-5. Run the platform matrix and race detector, verify license attribution, then publish binaries and checksums.
+1. Automatic identification of installed versions and local Git builds.
+2. Continuous script workers with ordered output and bounded lookahead.
+3. Portable file publication for destinations without hard-link support.
+4. Verified incremental downloads with persistent HTTP validators.
+5. Upstream license attribution and a release workflow that tests all supported platforms before publishing binaries and checksums.
 
 Changes are kept in separate commits. This README is the only Markdown document in the repository.
 
@@ -230,6 +230,8 @@ go build ./...
 ```
 
 Tests use local HTTP servers, TLS fixtures, and temporary directories. CI tests Go 1.26.0 and 1.27.1 on Linux, Windows, and macOS, and runs the race detector on Linux.
+
+Pushing a `vMAJOR.MINOR.PATCH` tag runs the same test matrix and race detector, then publishes six archives and `SHA256SUMS`. Release builds use `CGO_ENABLED=0` and include the project, Go runtime, and dependency licenses. Version and commit are embedded during compilation. Only the publishing job has repository write permission.
 
 Build with version information:
 

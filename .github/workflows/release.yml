@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: go.sum
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p dist
+          for os in linux windows darwin; do
+            for arch in amd64 arm64; do
+              package="getJS_${RELEASE_TAG}_${os}_${arch}"
+              stage="$RUNNER_TEMP/$package"
+              mkdir -p "$stage"
+              suffix=""
+              if [ "$os" = windows ]; then suffix=".exe"; fi
+              GOOS="$os" GOARCH="$arch" go build -mod=readonly -trimpath \
+                -ldflags="-s -w -X main.version=$RELEASE_TAG -X main.commit=$GITHUB_SHA" \
+                -o "$stage/getJS$suffix" .
+              cp LICENSE "$stage/LICENSE"
+              python3 - "$stage" <<'PY'
+          import pathlib, subprocess, sys
+          stage = pathlib.Path(sys.argv[1])
+          goroot = pathlib.Path(subprocess.check_output(["go", "env", "GOROOT"], text=True).strip())
+          sections = ["Go runtime\n\n" + (goroot / "LICENSE").read_text()]
+          modules = subprocess.check_output(["go", "list", "-mod=readonly", "-deps", "-f", "{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}|{{.Module.Dir}}{{end}}{{end}}", "."], text=True)
+          for module in sorted(set(modules.splitlines()) - {""}):
+              name, directory = module.split("|", 1)
+              license_path = pathlib.Path(directory) / "LICENSE"
+              sections.append(name + "\n\n" + license_path.read_text())
+          (stage / "THIRD_PARTY_LICENSES.txt").write_text("\n\n".join(sections))
+          PY
+              if [ "$os" = windows ]; then
+                (cd "$stage" && zip -q "$GITHUB_WORKSPACE/dist/$package.zip" ./*)
+              else
+                tar -czf "dist/$package.tar.gz" -C "$stage" .
+              fi
+            done
+          done
+          "$RUNNER_TEMP/getJS_${RELEASE_TAG}_linux_amd64/getJS" --version | tee "$RUNNER_TEMP/version.txt"
+          grep -F "getJS $RELEASE_TAG" "$RUNNER_TEMP/version.txt"
+          (cd dist && sha256sum ./* > SHA256SUMS)
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/release-notes.txt" <<EOF
+          Versioned getJS binaries for Linux, Windows, and macOS (amd64 and arm64).
+
+          This release includes continuous workers with ordered output, verified incremental downloads using ETag or Last-Modified, portable file publication, and automatic build version identification. It also includes offline HTML input, JSONL metadata, download manifests, and URL filters from the modernization update.
+
+          Each archive includes the project and third-party licenses. Verify downloads against SHA256SUMS. Install from source with:
+
+          \`go install github.com/bp0lr/getJS@$RELEASE_TAG\`
+
+          See the README at this tag for options and compatibility details. The complete platform test matrix and Linux race detector passed before publication.
+          EOF
+          gh release create "$RELEASE_TAG" dist/* --verify-tag \
+            --title "getJS $RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.txt"
