@@ -13,6 +13,7 @@ import (
 )
 
 type config struct {
+	sameOriginOnly                                               bool
 	jsonl, showVersion                                           bool
 	outputDir                                                    string
 	maxBody                                                      int64
@@ -44,6 +45,7 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	f.IntVar(&c.concurrency, "concurrency", 4, "Maximum simultaneous script tasks")
 	f.IntVar(&c.perHost, "per-host", 2, "Maximum simultaneous HTTP requests per hostname")
 	f.BoolVar(&c.jsonl, "jsonl", false, "Write one JSON object per discovery or error")
+	f.BoolVar(&c.sameOriginOnly, "same-origin", false, "Only process scripts from the final page origin")
 	f.BoolVar(&c.showVersion, "version", false, "Print build version")
 	f.StringVar(&c.outputDir, "output-dir", "download", "Directory for script downloads")
 	f.Int64Var(&c.maxBody, "max-body-size", 10*1024*1024, "Maximum HTML or downloaded script size in bytes")

@@ -225,6 +225,20 @@ func (a *application) processPage(ctx context.Context, raw string) error {
 }
 
 func (a *application) processSources(ctx context.Context, sources []source, origin *url.URL) error {
+	if a.c.sameOriginOnly {
+		filtered := make([]source, 0, len(sources))
+		for _, s := range sources {
+			if s.Kind == "inline" {
+				filtered = append(filtered, s)
+				continue
+			}
+			u, err := parseHTTPURL(s.URL)
+			if err == nil && sameOrigin(u, origin) {
+				filtered = append(filtered, s)
+			}
+		}
+		sources = filtered
+	}
 	var failures []error
 	// Batches bound both active work and the buffer needed for ordered output.
 	for start := 0; start < len(sources); start += a.c.concurrency {
@@ -308,6 +322,9 @@ func (a *application) cachedCheck(ctx context.Context, s source, origin *url.URL
 }
 
 func (a *application) checkScript(ctx context.Context, s source, origin *url.URL, index int) (result resourceResult, err error) {
+	if a.c.sameOriginOnly {
+		ctx = context.WithValue(ctx, originScopeKey{}, origin)
+	}
 	u, _ := parseHTTPURL(s.URL)
 	resp, err := request(ctx, a.client, a.c, u, origin)
 	if err != nil {

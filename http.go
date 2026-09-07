@@ -27,6 +27,8 @@ func effectivePort(u *url.URL) string {
 	return "80"
 }
 
+type originScopeKey struct{}
+
 func newHTTPClient(c config) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: c.insecure}
@@ -44,6 +46,9 @@ func newHTTPClient(c config) *http.Client {
 		Transport: &limitedTransport{base: tr, limit: max(1, c.perHost), hosts: make(map[string]chan struct{})},
 		Timeout:   c.timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if scope, ok := req.Context().Value(originScopeKey{}).(*url.URL); ok && !sameOrigin(req.URL, scope) {
+				return fmt.Errorf("script redirect leaves the page origin")
+			}
 			if !c.follow {
 				return http.ErrUseLastResponse
 			}
