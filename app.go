@@ -53,12 +53,16 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		return 0
 	}
-	if c.url == "" && c.input == "" && stdin == nil {
+	if c.url == "" && c.input == "" && c.htmlFile == "" && stdin == nil {
 		fmt.Fprintln(stderr, "getJS: no page URLs supplied")
 		return 3
 	}
 	if c.input != "" && c.output != "" && sameFilePath(c.input, c.output) {
 		fmt.Fprintln(stderr, "getJS: --input and --output must be different files")
+		return 3
+	}
+	if c.htmlFile != "" && c.output != "" && sameFilePath(c.htmlFile, c.output) {
+		fmt.Fprintln(stderr, "getJS: --html-file and --output must be different files")
 		return 3
 	}
 	writer := stdout
@@ -79,8 +83,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 		}()
 	}
-	a := application{c: c, client: newHTTPClient(c), out: writer, errOut: stderr, checks: make(map[string]*checkEntry), emitted: make(map[string]bool)}
-	defer a.client.CloseIdleConnections()
+	a := application{c: c, out: writer, errOut: stderr, checks: make(map[string]*checkEntry), emitted: make(map[string]bool)}
+	if c.htmlFile == "" {
+		a.client = newHTTPClient(c)
+		defer a.client.CloseIdleConnections()
+	}
 	failed, succeeded, count := 0, 0, 0
 	seenPages := make(map[string]bool)
 	err = walkInputs(c, stdin, func(page string) error {
@@ -96,7 +103,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		seenPages[key] = true
 		count++
-		if err := a.processPage(ctx, page); err != nil {
+		var pageErr error
+		if c.htmlFile != "" {
+			pageErr = a.processHTMLFile(ctx, page)
+		} else {
+			pageErr = a.processPage(ctx, page)
+		}
+		if err := pageErr; err != nil {
 			failed++
 			fmt.Fprintln(stderr, "getJS:", err)
 			var scriptErrors *scriptFailures
@@ -137,6 +150,17 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 }
 
 func walkInputs(c config, stdin io.Reader, visit func(string) error) error {
+	if c.htmlFile != "" {
+		abs, err := filepath.Abs(c.htmlFile)
+		if err != nil {
+			return err
+		}
+		p := filepath.ToSlash(abs)
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		return visit((&url.URL{Scheme: "file", Path: p}).String())
+	}
 	read := func(r io.Reader) error {
 		s := bufio.NewScanner(r)
 		s.Buffer(make([]byte, 4096), 1024*1024)
@@ -260,7 +284,7 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 						file, errs[i-start] = saveScript(a.c, *s, strings.NewReader(s.Inline), i)
 						s.Path, s.Size = file.Path, file.Size
 					}
-				} else if a.c.resolve || a.c.save {
+				} else if a.c.htmlFile == "" && (a.c.resolve || a.c.save) {
 					var result resourceResult
 					result, errs[i-start] = a.cachedCheck(ctx, *s, origin, i)
 					s.Status, s.FinalURL, s.Path, s.Size = result.status, result.finalURL, result.file.Path, result.file.Size

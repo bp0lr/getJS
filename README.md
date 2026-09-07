@@ -51,6 +51,8 @@ Both `--complete` and `--resolve` default to true. URL completion respects the f
 | --- | --- | --- | --- |
 | `--url` | `-u` | Empty | Page URL. |
 | `--input` | `-i` | Empty | File containing one page URL per line. |
+| `--html-file` | | Empty | Local HTML file to parse offline. |
+| `--base-url` | | Empty | Required HTTP(S) base URL for local HTML. |
 | `--output` | `-o` | Empty | Replace the result file and also print results to stdout. |
 | `--header` | `-H` | None | Repeatable custom header for pages and same-origin scripts. |
 | `--proxy` | `-p` | Environment | HTTP or HTTPS proxy URL; otherwise standard Go proxy environment variables apply. |
@@ -108,6 +110,18 @@ Results go to stdout; progress and errors go to stderr. `--output` also prints r
 
 ## Headers and downloads
 
+## Offline HTML
+
+```sh
+getJS --html-file page.html --base-url https://example.com/docs/page --jsonl
+```
+
+Offline mode makes no HTTP requests. It disables resolution automatically and rejects explicit `--resolve=true`. It cannot be combined with `--url` or `--input`; stdin is ignored. The base URL resolves relative references, and HTML `<base href>` is honored. JSONL records identify the input with an absolute file URI.
+
+With `--save`, offline mode saves inline code only. External script URLs are listed without checks or downloads. Size limits, URL filters, and `--same-origin` still apply. The HTML input and output file must be different.
+
+## Headers and downloads
+
 ```sh
 getJS -u https://example.com -H "Authorization: Bearer example" -H "X-Context: value:with:colons"
 getJS -u https://example.com --save --follow-redirect
@@ -150,7 +164,7 @@ JSONL preserves individual discoveries, including repeated references and their 
 - Parses returned HTML only; does not execute JavaScript or observe browser-injected scripts.
 - Ignores non-HTTP references for network operations.
 - Requires HTTP 200 for HTML and HTTP 200 or 304 for script checks. Status alone does not prove the body is JavaScript.
-- Offline HTML and additional extraction options are tracked in [PLAN.md](PLAN.md).
+- Metadata and a download manifest are tracked in [PLAN.md](PLAN.md).
 
 ## Development
 

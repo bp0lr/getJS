@@ -14,6 +14,7 @@ import (
 )
 
 type config struct {
+	htmlFile, baseURL                                            string
 	include, exclude                                             []*regexp.Regexp
 	sameOriginOnly                                               bool
 	jsonl, showVersion                                           bool
@@ -34,6 +35,8 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	f.SetOutput(stderr)
 	f.StringVarP(&c.url, "url", "u", "", "Page URL")
 	f.StringVarP(&c.input, "input", "i", "", "File containing one page URL per line")
+	f.StringVar(&c.htmlFile, "html-file", "", "Parse a local HTML file without network requests")
+	f.StringVar(&c.baseURL, "base-url", "", "Absolute HTTP(S) base URL for --html-file")
 	f.StringVarP(&c.output, "output", "o", "", "Write results to a file as well as stdout")
 	f.StringVarP(&c.proxy, "proxy", "p", "", "HTTP or HTTPS proxy URL")
 	f.StringArrayVarP(&headers, "header", "H", nil, "Page and same-origin script header (repeatable)")
@@ -62,6 +65,20 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	}
 	if c.showVersion {
 		return c, false, nil
+	}
+	if c.htmlFile != "" {
+		if c.url != "" || c.input != "" {
+			return c, false, fmt.Errorf("--html-file cannot be combined with --url or --input")
+		}
+		if f.Changed("resolve") && c.resolve {
+			return c, false, fmt.Errorf("--html-file is offline; --resolve=true is not allowed")
+		}
+		c.resolve = false
+		if _, err := parseHTTPURL(c.baseURL); err != nil {
+			return c, false, fmt.Errorf("--html-file requires a valid --base-url: %w", err)
+		}
+	} else if c.baseURL != "" {
+		return c, false, fmt.Errorf("--base-url requires --html-file")
 	}
 	for _, patterns := range []struct {
 		name   string
