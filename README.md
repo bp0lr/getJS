@@ -108,8 +108,6 @@ Results go to stdout; progress and errors go to stderr. `--output` also prints r
 | 3 | Invalid arguments or no input. |
 | 130 | Interrupted or cancelled. |
 
-## Headers and downloads
-
 ## Offline HTML
 
 ```sh
@@ -155,6 +153,10 @@ Each object includes `page` and `kind` (`script`, `inline`, `preload`, `modulepr
 
 JSONL preserves individual discoveries, including repeated references and their source pages, while checks and downloads remain cached. It includes inline records without embedding inline source text. Failed scripts have an error record; failed page fetches have a page error record. Diagnostics still go to stderr and partial failure still returns code 2.
 
+The `attributes` object records `type`, `async`, `defer`, `nomodule`, `integrity`, `crossorigin`, `referrerpolicy`, and link `rel`/`as` when applicable. Boolean HTML attributes use presence semantics: `async="false"` is still present. Empty `crossorigin=""` remains distinguishable from an absent attribute.
+
+`attributes.index` is the one-based position among script and link-with-href candidates in the parsed document, before filtering. Inline filenames use this position. Metadata describes HTML declarations; getJS does not execute scripts or verify Subresource Integrity.
+
 `--complete=false` changes plain-text output only; JSONL always keeps the resolved URL alongside the original reference.
 
 ## Scope and limitations
@@ -164,7 +166,7 @@ JSONL preserves individual discoveries, including repeated references and their 
 - Parses returned HTML only; does not execute JavaScript or observe browser-injected scripts.
 - Ignores non-HTTP references for network operations.
 - Requires HTTP 200 for HTML and HTTP 200 or 304 for script checks. Status alone does not prove the body is JavaScript.
-- Metadata and a download manifest are tracked in [PLAN.md](PLAN.md).
+- A download manifest is tracked in [PLAN.md](PLAN.md).
 
 ## Development
 

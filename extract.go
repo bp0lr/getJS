@@ -9,16 +9,18 @@ import (
 )
 
 type source struct {
-	Page     string `json:"page"`
-	URL      string `json:"url,omitempty"`
-	Raw      string `json:"reference,omitempty"`
-	Kind     string `json:"kind"`
-	Inline   string `json:"-"`
-	Status   int    `json:"status,omitempty"`
-	FinalURL string `json:"final_url,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Size     int64  `json:"size,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Metadata *scriptMetadata `json:"attributes,omitempty"`
+	Position int             `json:"-"`
+	Page     string          `json:"page"`
+	URL      string          `json:"url,omitempty"`
+	Raw      string          `json:"reference,omitempty"`
+	Kind     string          `json:"kind"`
+	Inline   string          `json:"-"`
+	Status   int             `json:"status,omitempty"`
+	FinalURL string          `json:"final_url,omitempty"`
+	Path     string          `json:"path,omitempty"`
+	Size     int64           `json:"size,omitempty"`
+	Error    string          `json:"error,omitempty"`
 }
 
 func extract(r io.Reader, page string, finalURL *url.URL) ([]source, error) {
@@ -37,7 +39,8 @@ func extract(r io.Reader, page string, finalURL *url.URL) ([]source, error) {
 		return false
 	})
 	var sources []source
-	doc.Find("script, link[href]").Each(func(_ int, s *goquery.Selection) {
+	doc.Find("script, link[href]").Each(func(index int, s *goquery.Selection) {
+		metadata := readMetadata(s, index+1)
 		if goquery.NodeName(s) == "link" {
 			kind := preloadKind(s.AttrOr("rel", ""), s.AttrOr("as", ""))
 			if kind == "" {
@@ -49,7 +52,7 @@ func extract(r io.Reader, page string, finalURL *url.URL) ([]source, error) {
 			}
 			u, err := resolveReference(base, raw)
 			if err == nil {
-				sources = append(sources, source{Page: page, URL: u.String(), Raw: raw, Kind: kind})
+				sources = append(sources, source{Page: page, URL: u.String(), Raw: raw, Kind: kind, Metadata: metadata, Position: index + 1})
 			}
 			return
 		}
@@ -60,12 +63,12 @@ func extract(r io.Reader, page string, finalURL *url.URL) ([]source, error) {
 		if raw != "" {
 			u, err := resolveReference(base, raw)
 			if err == nil {
-				sources = append(sources, source{Page: page, URL: u.String(), Raw: raw, Kind: "script"})
+				sources = append(sources, source{Page: page, URL: u.String(), Raw: raw, Kind: "script", Metadata: metadata, Position: index + 1})
 			}
 			return
 		}
 		if code := s.Text(); strings.TrimSpace(code) != "" {
-			sources = append(sources, source{Page: page, Kind: "inline", Inline: code})
+			sources = append(sources, source{Page: page, Kind: "inline", Inline: code, Metadata: metadata, Position: index + 1})
 		}
 	})
 	return sources, nil

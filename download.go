@@ -62,7 +62,11 @@ func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, er
 		return saved, err
 	}
 
-	name := fmt.Sprintf("inline-%d.js", index+1)
+	position := s.Position
+	if position == 0 {
+		position = index + 1
+	}
+	name := fmt.Sprintf("inline-%d.js", position)
 	if s.Kind != "inline" {
 		u, _ := url.Parse(s.URL)
 		base := safeName(path.Base(u.Path))
