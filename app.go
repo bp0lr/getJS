@@ -225,7 +225,7 @@ func (a *application) processPage(ctx context.Context, raw string) error {
 }
 
 func (a *application) processSources(ctx context.Context, sources []source, origin *url.URL) error {
-	if a.c.sameOriginOnly {
+	if a.c.sameOriginOnly || len(a.c.include) > 0 || len(a.c.exclude) > 0 {
 		filtered := make([]source, 0, len(sources))
 		for _, s := range sources {
 			if s.Kind == "inline" {
@@ -233,7 +233,7 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 				continue
 			}
 			u, err := parseHTTPURL(s.URL)
-			if err == nil && sameOrigin(u, origin) {
+			if err == nil && (!a.c.sameOriginOnly || sameOrigin(u, origin)) && a.c.matchesURL(s.URL) {
 				filtered = append(filtered, s)
 			}
 		}

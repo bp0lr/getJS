@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 )
 
 type config struct {
+	include, exclude                                             []*regexp.Regexp
 	sameOriginOnly                                               bool
 	jsonl, showVersion                                           bool
 	outputDir                                                    string
@@ -27,6 +29,7 @@ type config struct {
 func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	var c config
 	var headers []string
+	var includes, excludes []string
 	f := pflag.NewFlagSet("getJS", pflag.ContinueOnError)
 	f.SetOutput(stderr)
 	f.StringVarP(&c.url, "url", "u", "", "Page URL")
@@ -46,6 +49,8 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	f.IntVar(&c.perHost, "per-host", 2, "Maximum simultaneous HTTP requests per hostname")
 	f.BoolVar(&c.jsonl, "jsonl", false, "Write one JSON object per discovery or error")
 	f.BoolVar(&c.sameOriginOnly, "same-origin", false, "Only process scripts from the final page origin")
+	f.StringArrayVar(&includes, "include", nil, "Include script URLs matching a Go regexp (repeatable, any match)")
+	f.StringArrayVar(&excludes, "exclude", nil, "Exclude script URLs matching a Go regexp (repeatable, takes precedence)")
 	f.BoolVar(&c.showVersion, "version", false, "Print build version")
 	f.StringVar(&c.outputDir, "output-dir", "download", "Directory for script downloads")
 	f.Int64Var(&c.maxBody, "max-body-size", 10*1024*1024, "Maximum HTML or downloaded script size in bytes")
@@ -57,6 +62,19 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	}
 	if c.showVersion {
 		return c, false, nil
+	}
+	for _, patterns := range []struct {
+		name   string
+		values []string
+		dest   *[]*regexp.Regexp
+	}{{"include", includes, &c.include}, {"exclude", excludes, &c.exclude}} {
+		for _, pattern := range patterns.values {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return c, false, fmt.Errorf("--%s: invalid regexp %q: %w", patterns.name, pattern, err)
+			}
+			*patterns.dest = append(*patterns.dest, re)
+		}
 	}
 	if c.maxBody < 1 || c.maxBody > 1<<40 {
 		return c, false, fmt.Errorf("--max-body-size must be between 1 and 1099511627776 bytes")

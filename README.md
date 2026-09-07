@@ -63,6 +63,8 @@ Both `--complete` and `--resolve` default to true. URL completion respects the f
 | `--per-host` | | `2` | Maximum active HTTP requests per hostname, including HTTP/2 streams, from 1 to 256. |
 | `--jsonl` | | `false` | One JSON object per discovery or failure, preserving page provenance. |
 | `--same-origin` | | `false` | Keep scripts from the final page origin only, before checking or downloading. |
+| `--include` | | None | Repeatable Go regexp; keep a URL if any inclusion pattern matches. |
+| `--exclude` | | None | Repeatable Go regexp; any exclusion match wins over inclusion. |
 | `--output-dir` | | `download` | Download destination directory. |
 | `--max-body-size` | | `10485760` | Maximum HTML or downloaded script bytes (10 MiB by default). |
 | `--version` | | | Print version and commit without processing input. |
@@ -114,6 +116,14 @@ getJS -u https://example.com --save --follow-redirect
 Custom headers are sent to each supplied page and its same-origin scripts. They are removed when a redirect chain changes origin and are not restored later in that chain. Same origin means equal scheme, hostname, and effective port. Header values are not logged.
 
 `--same-origin` also filters output when checks are disabled. The final page URL defines the origin; an HTML base can resolve references but cannot expand it. Inline code remains included. Page redirects may establish a new page origin; a script redirect leaving that origin is refused before contacting the destination and is reported as a script error.
+
+Select declared script URLs by pattern:
+
+```sh
+getJS -u https://example.com --include 'app|worker' --exclude 'vendor' --resolve=false
+```
+
+Patterns use Go's regexp syntax and are compiled once. They match the full resolved reference URL, including its query, even with `--complete=false`. Matching happens before script requests; it is not a redirect-destination policy. Inline code has no URL and is unaffected by these patterns.
 
 Downloads go under `<output-dir>/<page-host>/<page-url-hash>/`. External names include a stable URL hash, including query strings. Names are sanitized for Windows and existing files are preserved using numbered suffixes.
 
