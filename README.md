@@ -124,7 +124,7 @@ The body limit applies to parsed HTML and saved scripts after automatic HTTP dec
 getJS --input pages.txt --jsonl --save --output-dir scripts --output results.jsonl
 ```
 
-Each object includes `page` and `kind` (`script`, `inline`, or `page` for a page error). External discoveries include absolute `url` and the original `reference`. Optional fields include `status`, `final_url`, `path`, `size`, and `error`.
+Each object includes `page` and `kind` (`script`, `inline`, `preload`, `modulepreload`, or `page` for a page error). External discoveries include absolute `url` and the original `reference`. Optional fields include `status`, `final_url`, `path`, `size`, and `error`.
 
 JSONL preserves individual discoveries, including repeated references and their source pages, while checks and downloads remain cached. It includes inline records without embedding inline source text. Failed scripts have an error record; failed page fetches have a page error record. Diagnostics still go to stderr and partial failure still returns code 2.
 
@@ -133,6 +133,7 @@ JSONL preserves individual discoveries, including repeated references and their 
 ## Scope and limitations
 
 - Reads `src` and `data-src` from script elements. Inline text is saved with `--save`.
+- Also reads `link[rel~=modulepreload]` with a script-like destination and `link[rel~=preload][as=script]`, in document order. Explicit non-script destinations are excluded. A preload is a declared resource hint, not evidence of execution.
 - Parses returned HTML only; does not execute JavaScript or observe browser-injected scripts.
 - Ignores non-HTTP references for network operations.
 - Requires HTTP 200 for HTML and HTTP 200 or 304 for script checks. Status alone does not prove the body is JavaScript.

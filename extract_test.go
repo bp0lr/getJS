@@ -50,3 +50,29 @@ func TestExtractBaseAndAttributePriority(t *testing.T) {
 		t.Fatal("lost input page provenance")
 	}
 }
+
+func TestPreloadsPreserveDocumentOrder(t *testing.T) {
+	u, _ := url.Parse("https://example.test/page")
+	html := "<base href='/assets/'>" +
+		"<link rel='alternate MODULEPRELOAD' href='module.js'>" +
+		"<script type='module' src='entry.js'></script>" +
+		"<link rel='preload' as='SCRIPT' href='legacy.js'>" +
+		"<link rel='modulepreload' as='worker' href='worker.js'>" +
+		"<link rel='modulepreload' as='style' href='style.css'>" +
+		"<link rel='preload' href='unknown.js'>" +
+		"<link rel='preload' as='image' href='image.png'>" +
+		"<link rel='notmodulepreload' href='no.js'>" +
+		"<link rel='modulepreload' href='data:text/javascript,x'>" +
+		"<link rel='modulepreload' href=' '>"
+	got, err := extract(strings.NewReader(html), u.String(), u)
+	if err != nil || len(got) != 4 {
+		t.Fatalf("%#v %v", got, err)
+	}
+	kinds := []string{"modulepreload", "script", "preload", "modulepreload"}
+	names := []string{"module.js", "entry.js", "legacy.js", "worker.js"}
+	for i, s := range got {
+		if s.Kind != kinds[i] || s.URL != "https://example.test/assets/"+names[i] {
+			t.Fatalf("%#v", got)
+		}
+	}
+}

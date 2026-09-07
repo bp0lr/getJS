@@ -37,7 +37,22 @@ func extract(r io.Reader, page string, finalURL *url.URL) ([]source, error) {
 		return false
 	})
 	var sources []source
-	doc.Find("script").Each(func(_ int, s *goquery.Selection) {
+	doc.Find("script, link[href]").Each(func(_ int, s *goquery.Selection) {
+		if goquery.NodeName(s) == "link" {
+			kind := preloadKind(s.AttrOr("rel", ""), s.AttrOr("as", ""))
+			if kind == "" {
+				return
+			}
+			raw := strings.TrimSpace(s.AttrOr("href", ""))
+			if raw == "" {
+				return
+			}
+			u, err := resolveReference(base, raw)
+			if err == nil {
+				sources = append(sources, source{Page: page, URL: u.String(), Raw: raw, Kind: kind})
+			}
+			return
+		}
 		raw := strings.TrimSpace(s.AttrOr("src", ""))
 		if raw == "" {
 			raw = strings.TrimSpace(s.AttrOr("data-src", ""))
@@ -54,6 +69,27 @@ func extract(r io.Reader, page string, finalURL *url.URL) ([]source, error) {
 		}
 	})
 	return sources, nil
+}
+
+func preloadKind(rel, as string) string {
+	as = strings.ToLower(strings.TrimSpace(as))
+	tokens := strings.Fields(strings.ToLower(rel))
+	for _, token := range tokens {
+		if token == "modulepreload" {
+			switch as {
+			case "", "script", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet":
+				return "modulepreload"
+			}
+		}
+	}
+	if as == "script" {
+		for _, token := range tokens {
+			if token == "preload" {
+				return "preload"
+			}
+		}
+	}
+	return ""
 }
 
 func resolveReference(base *url.URL, raw string) (*url.URL, error) {
