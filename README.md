@@ -21,7 +21,7 @@ go build -o getJS.exe .
 .\getJS.exe --help
 ```
 
-`go install .` installs into your Go binary directory, which must be on PATH. Module changes in the modernization PRs must be merged before remote installation can use them.
+`go install .` installs into your Go binary directory, which must be on PATH. The modernization commits must reach the default branch before remote installation from that branch can use them.
 
 ## Quick start
 
@@ -61,6 +61,10 @@ Both `--complete` and `--resolve` default to true. URL completion respects the f
 | `--timeout` | | `15s` | Positive duration for each HTTP request, including body reading. |
 | `--concurrency` | | `4` | Maximum simultaneous script tasks, from 1 to 256. |
 | `--per-host` | | `2` | Maximum active HTTP requests per hostname, including HTTP/2 streams, from 1 to 256. |
+| `--jsonl` | | `false` | One JSON object per discovery or failure, preserving page provenance. |
+| `--output-dir` | | `download` | Download destination directory. |
+| `--max-body-size` | | `10485760` | Maximum HTML or downloaded script bytes (10 MiB by default). |
+| `--version` | | | Print version and commit without processing input. |
 | `--insecure` | | `false` | Disable TLS certificate verification explicitly. |
 | `--verbose` | `-v` | `false` | Write progress to stderr. |
 | `--nocolors` | `-n` | `false` | Compatibility flag; output is always plain text. |
@@ -108,7 +112,23 @@ getJS -u https://example.com --save --follow-redirect
 
 Custom headers are sent to each supplied page and its same-origin scripts. They are removed when a redirect chain changes origin and are not restored later in that chain. Same origin means equal scheme, hostname, and effective port. Header values are not logged.
 
-Downloads go under `download/<page-host>/`. Names are sanitized for Windows and existing files are preserved using numbered suffixes. Incomplete files are removed when a write fails. HTTP 304 is accepted for checks but cannot produce a download without a cached body.
+Downloads go under `<output-dir>/<page-host>/<page-url-hash>/`. External names include a stable URL hash, including query strings. Names are sanitized for Windows and existing files are preserved using numbered suffixes.
+
+Files are written to a temporary path, checked against the size limit, flushed, and published without replacing existing files. Publication requires filesystem hard-link support (for example NTFS, ext4, or APFS). An unsupported destination produces an explicit error. Paths are confined to the selected download root. Incomplete temporary files are cleaned up on handled failures. HTTP 304 is accepted for checks but cannot produce a download without a cached body.
+
+The body limit applies to parsed HTML and saved scripts after automatic HTTP decompression. Checks reject a known oversized Content-Length but may stop after 64 KiB when the length is unknown; they do not certify the full body size. `--max-body-size` accepts an integer from 1 byte to 1 TiB.
+
+## JSONL
+
+```sh
+getJS --input pages.txt --jsonl --save --output-dir scripts --output results.jsonl
+```
+
+Each object includes `page` and `kind` (`script`, `inline`, or `page` for a page error). External discoveries include absolute `url` and the original `reference`. Optional fields include `status`, `final_url`, `path`, `size`, and `error`.
+
+JSONL preserves individual discoveries, including repeated references and their source pages, while checks and downloads remain cached. It includes inline records without embedding inline source text. Failed scripts have an error record; failed page fetches have a page error record. Diagnostics still go to stderr and partial failure still returns code 2.
+
+`--complete=false` changes plain-text output only; JSONL always keeps the resolved URL alongside the original reference.
 
 ## Scope and limitations
 
@@ -116,7 +136,7 @@ Downloads go under `download/<page-host>/`. Names are sanitized for Windows and 
 - Parses returned HTML only; does not execute JavaScript or observe browser-injected scripts.
 - Ignores non-HTTP references for network operations.
 - Requires HTTP 200 for HTML and HTTP 200 or 304 for script checks. Status alone does not prove the body is JavaScript.
-- JSONL, size limits, offline HTML, and additional extraction options are tracked in [PLAN.md](PLAN.md).
+- Offline HTML and additional extraction options are tracked in [PLAN.md](PLAN.md).
 
 ## Development
 
@@ -126,7 +146,7 @@ go vet ./...
 go build ./...
 ```
 
-Tests use local HTTP servers, TLS fixtures, and temporary directories. See [PLAN.md](PLAN.md) for the PR sequence and acceptance criteria.
+Tests use local HTTP servers, TLS fixtures, and temporary directories. See [PLAN.md](PLAN.md) for the commit sequence and acceptance criteria.
 
 ## Contributing and credits
 

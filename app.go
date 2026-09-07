@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,8 +27,15 @@ type application struct {
 }
 
 type checkEntry struct {
-	done chan struct{}
-	err  error
+	done   chan struct{}
+	err    error
+	result resourceResult
+}
+
+type resourceResult struct {
+	status   int
+	finalURL string
+	file     savedFile
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
@@ -38,6 +46,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		fmt.Fprintln(stderr, "getJS:", err)
 		return 3
+	}
+	if c.showVersion {
+		if _, err := fmt.Fprintf(stdout, "getJS %s (%s)\n", version, commit); err != nil {
+			return 1
+		}
+		return 0
 	}
 	if c.url == "" && c.input == "" && stdin == nil {
 		fmt.Fprintln(stderr, "getJS: no page URLs supplied")
@@ -85,6 +99,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err := a.processPage(ctx, page); err != nil {
 			failed++
 			fmt.Fprintln(stderr, "getJS:", err)
+			var scriptErrors *scriptFailures
+			if !errors.As(err, &scriptErrors) && a.writeErr == nil {
+				if err := a.emit(source{Page: page, Kind: "page", Error: err.Error()}); err != nil {
+					return err
+				}
+			}
 		} else {
 			succeeded++
 		}
@@ -186,13 +206,20 @@ func (a *application) processPage(ctx context.Context, raw string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("page %s: HTTP %d", u, resp.StatusCode)
 	}
-	sources, err := extract(resp.Body, u.String(), resp.Request.URL)
+	if resp.ContentLength > a.c.maxBody {
+		return fmt.Errorf("page exceeds --max-body-size (%d bytes)", a.c.maxBody)
+	}
+	body := &io.LimitedReader{R: resp.Body, N: a.c.maxBody + 1}
+	sources, err := extract(body, u.String(), resp.Request.URL)
 	closeErr := resp.Body.Close()
 	if err != nil {
 		return err
 	}
 	if closeErr != nil {
 		return closeErr
+	}
+	if body.N == 0 {
+		return fmt.Errorf("page exceeds --max-body-size (%d bytes)", a.c.maxBody)
 	}
 	return a.processSources(ctx, sources, resp.Request.URL)
 }
@@ -206,18 +233,23 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 		}
 		end := min(start+a.c.concurrency, len(sources))
 		errs := make([]error, end-start)
+		results := append([]source(nil), sources[start:end]...)
 		var wg sync.WaitGroup
 		for i := start; i < end; i++ {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				s := sources[i]
+				s := &results[i-start]
 				if s.Kind == "inline" {
 					if a.c.save {
-						_, errs[i-start] = saveScript(s, strings.NewReader(s.Inline), i)
+						var file savedFile
+						file, errs[i-start] = saveScript(a.c, *s, strings.NewReader(s.Inline), i)
+						s.Path, s.Size = file.Path, file.Size
 					}
 				} else if a.c.resolve || a.c.save {
-					errs[i-start] = a.cachedCheck(ctx, s, origin, i)
+					var result resourceResult
+					result, errs[i-start] = a.cachedCheck(ctx, *s, origin, i)
+					s.Status, s.FinalURL, s.Path, s.Size = result.status, result.finalURL, result.file.Path, result.file.Size
 				}
 			}(i)
 		}
@@ -225,19 +257,29 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 		for i := start; i < end; i++ {
 			if errs[i-start] != nil {
 				failures = append(failures, errs[i-start])
-				continue
-			}
-			if sources[i].Kind != "inline" {
-				if err := a.emit(sources[i]); err != nil {
+				results[i-start].Error = errs[i-start].Error()
+				if err := a.emit(results[i-start]); err != nil {
 					return err
 				}
+				continue
+			}
+			if err := a.emit(results[i-start]); err != nil {
+				return err
 			}
 		}
 	}
-	return errors.Join(failures...)
+	if len(failures) > 0 {
+		return &scriptFailures{err: errors.Join(failures...)}
+	}
+	return nil
 }
 
-func (a *application) cachedCheck(ctx context.Context, s source, origin *url.URL, index int) error {
+type scriptFailures struct{ err error }
+
+func (e *scriptFailures) Error() string { return e.err.Error() }
+func (e *scriptFailures) Unwrap() error { return e.err }
+
+func (a *application) cachedCheck(ctx context.Context, s source, origin *url.URL, index int) (resourceResult, error) {
 	u, _ := parseHTTPURL(s.URL)
 	key := canonicalURL(u)
 	if len(a.c.headers) > 0 {
@@ -252,42 +294,68 @@ func (a *application) cachedCheck(ctx context.Context, s source, origin *url.URL
 		a.cacheMu.Unlock()
 		select {
 		case <-entry.done:
-			return entry.err
+			return entry.result, entry.err
 		case <-ctx.Done():
-			return ctx.Err()
+			return resourceResult{}, ctx.Err()
 		}
 	}
 	entry := &checkEntry{done: make(chan struct{})}
 	a.checks[key] = entry
 	a.cacheMu.Unlock()
-	entry.err = a.checkScript(ctx, s, origin, index)
+	entry.result, entry.err = a.checkScript(ctx, s, origin, index)
 	close(entry.done)
-	return entry.err
+	return entry.result, entry.err
 }
 
-func (a *application) checkScript(ctx context.Context, s source, origin *url.URL, index int) error {
+func (a *application) checkScript(ctx context.Context, s source, origin *url.URL, index int) (result resourceResult, err error) {
 	u, _ := parseHTTPURL(s.URL)
 	resp, err := request(ctx, a.client, a.c, u, origin)
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer resp.Body.Close()
+	result.status, result.finalURL = resp.StatusCode, resp.Request.URL.String()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotModified {
-		return fmt.Errorf("script %s: HTTP %d", s.URL, resp.StatusCode)
+		return result, fmt.Errorf("script %s: HTTP %d", s.URL, resp.StatusCode)
+	}
+	if resp.ContentLength > a.c.maxBody {
+		return result, fmt.Errorf("script exceeds --max-body-size (%d bytes)", a.c.maxBody)
 	}
 	if a.c.save {
 		if resp.StatusCode == http.StatusNotModified {
-			return fmt.Errorf("script %s: HTTP 304 has no body to save", s.URL)
+			return result, fmt.Errorf("script %s: HTTP 304 has no body to save", s.URL)
 		}
-		_, err = saveScript(s, resp.Body, index)
-		return err
+		result.file, err = saveScript(a.c, s, resp.Body, index)
+		return result, err
 	}
 	// Bound draining so that a large script does not monopolize a worker.
-	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
-	return err
+	n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, min(64*1024, a.c.maxBody+1)))
+	if n > a.c.maxBody {
+		return result, fmt.Errorf("script exceeds --max-body-size (%d bytes)", a.c.maxBody)
+	}
+	return result, err
 }
 
 func (a *application) emit(s source) error {
+	if a.c.jsonl {
+		if err := json.NewEncoder(a.out).Encode(s); err != nil {
+			a.writeErr = err
+			return err
+		}
+		if s.Error == "" {
+			a.records++
+		}
+		return nil
+	}
+	if s.Error != "" {
+		return nil
+	}
+	if s.Kind == "inline" {
+		if s.Path != "" {
+			a.records++
+		}
+		return nil
+	}
 	u, _ := parseHTTPURL(s.URL)
 	key := canonicalURL(u)
 	if a.emitted[key] {

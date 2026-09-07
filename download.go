@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,11 @@ import (
 	"strings"
 	"unicode"
 )
+
+type savedFile struct {
+	Path string
+	Size int64
+}
 
 func safeName(s string) string {
 	s = strings.Map(func(r rune) rune {
@@ -34,19 +41,56 @@ func safeName(s string) string {
 	return s
 }
 
-func saveScript(s source, r io.Reader, index int) (string, error) {
+func shortHash(s string) string { sum := sha256.Sum256([]byte(s)); return fmt.Sprintf("%x", sum[:8]) }
+
+func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, err error) {
 	page, _ := url.Parse(s.Page)
-	dir := filepath.Join("download", safeName(page.Host))
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
+	host := "local"
+	if page != nil && page.Host != "" {
+		host = safeName(page.Host)
 	}
+	dir := filepath.Join(host, shortHash(s.Page))
+	if err := os.MkdirAll(c.outputDir, 0755); err != nil {
+		return saved, err
+	}
+	root, err := os.OpenRoot(c.outputDir)
+	if err != nil {
+		return saved, err
+	}
+	defer root.Close()
+	if err := root.MkdirAll(dir, 0755); err != nil {
+		return saved, err
+	}
+
 	name := fmt.Sprintf("inline-%d.js", index+1)
 	if s.Kind != "inline" {
 		u, _ := url.Parse(s.URL)
-		name = safeName(path.Base(u.Path))
-		if path.Ext(name) == "" {
-			name += ".js"
+		base := safeName(path.Base(u.Path))
+		ext := path.Ext(base)
+		if ext == "" {
+			ext = ".js"
 		}
+		name = strings.TrimSuffix(base, path.Ext(base)) + "-" + shortHash(s.URL) + ext
+	}
+	temp := filepath.Join(dir, ".getjs-"+rand.Text()+".tmp")
+	f, err := root.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return saved, err
+	}
+	defer func() {
+		if cleanupErr := root.Remove(temp); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+	n, copyErr := io.Copy(f, io.LimitReader(r, c.maxBody+1))
+	if n > c.maxBody {
+		copyErr = errors.Join(copyErr, fmt.Errorf("script exceeds --max-body-size (%d bytes)", c.maxBody))
+	}
+	if copyErr == nil {
+		copyErr = f.Sync()
+	}
+	if err := errors.Join(copyErr, f.Close()); err != nil {
+		return saved, err
 	}
 	for i := 0; ; i++ {
 		candidate := name
@@ -54,18 +98,14 @@ func saveScript(s source, r io.Reader, index int) (string, error) {
 			candidate = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(name, path.Ext(name)), i, path.Ext(name))
 		}
 		dest := filepath.Join(dir, candidate)
-		f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		// A hard link publishes complete content atomically without replacing a file.
+		err := root.Link(temp, dest)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return saved, fmt.Errorf("publish download (filesystem must support hard links): %w", err)
 		}
-		_, copyErr := io.Copy(f, r)
-		err = errors.Join(copyErr, f.Close())
-		if err != nil {
-			return "", errors.Join(err, os.Remove(dest))
-		}
-		return dest, nil
+		return savedFile{Path: filepath.Join(c.outputDir, dest), Size: n}, nil
 	}
 }

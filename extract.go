@@ -9,11 +9,16 @@ import (
 )
 
 type source struct {
-	Page   string
-	URL    string
-	Raw    string
-	Kind   string
-	Inline string
+	Page     string `json:"page"`
+	URL      string `json:"url,omitempty"`
+	Raw      string `json:"reference,omitempty"`
+	Kind     string `json:"kind"`
+	Inline   string `json:"-"`
+	Status   int    `json:"status,omitempty"`
+	FinalURL string `json:"final_url,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 func extract(r io.Reader, page string, finalURL *url.URL) ([]source, error) {

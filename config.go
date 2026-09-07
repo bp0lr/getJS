@@ -13,6 +13,9 @@ import (
 )
 
 type config struct {
+	jsonl, showVersion                                           bool
+	outputDir                                                    string
+	maxBody                                                      int64
 	concurrency, perHost                                         int
 	url, input, output, proxy                                    string
 	headers                                                      http.Header
@@ -40,11 +43,24 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	f.DurationVar(&c.timeout, "timeout", 15*time.Second, "Maximum duration of each HTTP request")
 	f.IntVar(&c.concurrency, "concurrency", 4, "Maximum simultaneous script tasks")
 	f.IntVar(&c.perHost, "per-host", 2, "Maximum simultaneous HTTP requests per hostname")
+	f.BoolVar(&c.jsonl, "jsonl", false, "Write one JSON object per discovery or error")
+	f.BoolVar(&c.showVersion, "version", false, "Print build version")
+	f.StringVar(&c.outputDir, "output-dir", "download", "Directory for script downloads")
+	f.Int64Var(&c.maxBody, "max-body-size", 10*1024*1024, "Maximum HTML or downloaded script size in bytes")
 	if err := f.Parse(args); err != nil {
 		return c, err == pflag.ErrHelp, err
 	}
 	if f.NArg() != 0 {
 		return c, false, fmt.Errorf("unexpected positional arguments; use --url or --input")
+	}
+	if c.showVersion {
+		return c, false, nil
+	}
+	if c.maxBody < 1 || c.maxBody > 1<<40 {
+		return c, false, fmt.Errorf("--max-body-size must be between 1 and 1099511627776 bytes")
+	}
+	if strings.TrimSpace(c.outputDir) == "" {
+		return c, false, fmt.Errorf("--output-dir cannot be empty")
 	}
 	if c.timeout <= 0 {
 		return c, false, fmt.Errorf("--timeout must be positive")

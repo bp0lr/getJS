@@ -119,11 +119,11 @@ Conserva valor para inventariar scripts declarados en HTML, archivar recursos y 
 
 Sí vale la pena mantenerlo como herramienta pequeña y fiable. Priorizar las correcciones y validar que siga siendo útil en los flujos reales del usuario antes de ampliar el alcance.
 
-## Serie de PRs aprobada
+## Serie de commits aprobada
 
-Implementar como PRs encadenados. Cada rama parte de la anterior y cada PR compara contra esa rama, para mostrar solo su cambio. Integrar en el orden siguiente y cambiar la base al integrar su dependencia. La apertura de PRs no implica merge automático.
+El usuario corrigió la entrega: commits separados, sin PRs. Los tres PRs que ya se habían abierto se cerraron. Conservar los commits y continuar la implementación en una sola rama, `modernize/getjs-2026`. No abrir nuevos PRs ni hacer merge automático.
 
-| Orden | Rama | Entrega |
+| Orden | Identificador de entrega | Entrega |
 | --- | --- | --- |
 | 1 | `modernize/01-go-modules` | Go, dependencias fijadas y plan. |
 | 2 | `modernize/02-reliability` | URLs, entradas, HTTP, TLS, timeout, errores y tests. |
@@ -137,7 +137,7 @@ Implementar como PRs encadenados. Cada rama parte de la anterior y cada PR compa
 | 10 | `modernize/10-manifest` | Manifiesto de descargas y SHA-256. |
 | 11 | `modernize/11-ci-docs` | CI, documentación final y distribución. |
 
-Cada PR incorpora sus tests y la documentación de sus opciones. Los tests de HTTP usan servidores locales. Los benchmarks deben medir resultados equivalentes. Los cambios permanecen en PR hasta su revisión.
+Cada commit incorpora sus tests y la documentación de sus opciones. Los tests de HTTP usan servidores locales. Los benchmarks deben medir resultados equivalentes. Los identificadores de entrega de la tabla son etiquetas de planificación; todos los commits nuevos se realizan en la misma rama.
 
 ## Orden recomendado
 

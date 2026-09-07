@@ -19,6 +19,8 @@ func main() {
 	}
 	if info.Mode()&os.ModeCharDevice == 0 {
 		input = os.Stdin
+		stopInput := context.AfterFunc(ctx, func() { _ = os.Stdin.Close() })
+		defer stopInput()
 	}
 	os.Exit(run(ctx, os.Args[1:], input, os.Stdout, os.Stderr))
 }
