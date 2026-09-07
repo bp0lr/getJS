@@ -271,6 +271,6 @@ For a separate 1 KiB fixture with 1 ms delay, HEAD with fallback took about 3.06
 
 Use [this fork's issue tracker](https://github.com/bp0lr/getJS/issues). Include a minimal example and remove credentials from logs.
 
-The original README declares this project MIT-licensed. This repository does not include a separate license file.
+Licensed under the [MIT License](LICENSE), preserving the original copyright notice from [003random/getJS](https://github.com/003random/getJS/blob/master/LICENSE).
 
 Thanks to [003random](https://github.com/003random) for the original implementation and [pczajkowski](https://github.com/pczajkowski) for credited improvements and ideas.
