@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, modernize/getjs-2026]
+    branches: [master, 'improve/**']
   pull_request:
   workflow_dispatch:
 

@@ -190,6 +190,18 @@ Compare hashes to detect content changes or identical content at different URLs.
 
 ## Development
 
+### Implementation sequence for v0.1.0
+
+1. Identify installed versions and local Git builds automatically; prepare the first versioned release.
+2. Replace batch barriers with continuous script workers, preserving ordered output and bounded lookahead.
+3. Reuse verified downloads with conditional HTTP requests and persistent validators.
+4. Add portable file publication for destinations without hard-link support.
+5. Run the platform matrix and race detector, verify license attribution, then publish binaries and checksums.
+
+Changes are kept in separate commits. This README is the only Markdown document in the repository.
+
+### Build and test
+
 ```sh
 go test ./...
 go vet ./...
@@ -203,6 +215,8 @@ Build with version information:
 ```sh
 go build -ldflags="-X main.version=dev -X main.commit=local" .
 ```
+
+`--version` uses module build information for `go install`, Git revision information for local builds, and explicit linker values when supplied. Local builds with uncommitted changes show `[modified]`. Installed release tags identify the version even when Go does not embed a Git revision.
 
 ### Performance measurements
 

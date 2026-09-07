@@ -50,7 +50,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return 3
 	}
 	if c.showVersion {
-		if _, err := fmt.Fprintf(stdout, "getJS %s (%s)\n", version, commit); err != nil {
+		if _, err := fmt.Fprintln(stdout, currentVersion()); err != nil {
 			return 1
 		}
 		return 0
