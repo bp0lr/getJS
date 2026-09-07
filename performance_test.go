@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -106,6 +107,60 @@ func TestPerHostLimitWithHTTP2(t *testing.T) {
 	}
 	if peak.Load() != 2 {
 		t.Fatalf("peak=%d", peak.Load())
+	}
+}
+
+func TestContinuousWorkersAdvancePastSlowFirstResource(t *testing.T) {
+	thirdStarted := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, "<script src='/slow.js'></script><script src='/fast.js'></script><script src='/third.js'></script>")
+			return
+		case "/slow.js":
+			select {
+			case <-thirdStarted:
+			case <-r.Context().Done():
+				return
+			}
+		case "/third.js":
+			once.Do(func() { close(thirdStarted) })
+		}
+		fmt.Fprint(w, "ok")
+	}))
+	defer srv.Close()
+	code, out, err := invoke("-u", srv.URL, "--concurrency=2", "--per-host=2", "--timeout=2s")
+	want := srv.URL + "/slow.js\n" + srv.URL + "/fast.js\n" + srv.URL + "/third.js\n"
+	if code != 0 || out != want {
+		t.Fatalf("code=%d output=%q error=%s", code, out, err)
+	}
+}
+
+func TestDuplicateReferencesDoNotOccupyWorkers(t *testing.T) {
+	nextStarted := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, "<script src='/slow.js'></script><script src='/slow.js'></script><script src='/next.js'></script>")
+			return
+		case "/slow.js":
+			select {
+			case <-nextStarted:
+			case <-r.Context().Done():
+				return
+			}
+		case "/next.js":
+			once.Do(func() { close(nextStarted) })
+		}
+		fmt.Fprint(w, "ok")
+	}))
+	defer srv.Close()
+	code, out, err := invoke("-u", srv.URL, "--concurrency=2", "--per-host=2", "--timeout=2s", "--jsonl")
+	got := decodeSources(t, out)
+	if code != 0 || len(got) != 3 || got[0].URL != got[1].URL || got[0].Metadata.Index == got[1].Metadata.Index {
+		t.Fatalf("%d %#v %s", code, got, err)
 	}
 }
 

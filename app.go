@@ -291,47 +291,88 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 		}
 		sources = filtered
 	}
-	var failures []error
-	// Batches bound both active work and the buffer needed for ordered output.
-	for start := 0; start < len(sources); start += a.c.concurrency {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		end := min(start+a.c.concurrency, len(sources))
-		errs := make([]error, end-start)
-		results := append([]source(nil), sources[start:end]...)
-		var wg sync.WaitGroup
-		for i := start; i < end; i++ {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				s := &results[i-start]
-				if s.Kind == "inline" {
-					if a.c.save {
-						var file savedFile
-						file, errs[i-start] = saveScript(a.c, *s, strings.NewReader(s.Inline), i)
-						s.Path, s.Size, s.SHA256 = file.Path, file.Size, file.SHA256
+	if len(sources) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	workers := min(max(1, a.c.concurrency), len(sources))
+	jobs := make(chan int)
+	results := make(chan sourceOutcome, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case index, ok := <-jobs:
+					if !ok {
+						return
 					}
-				} else if a.c.htmlFile == "" && (a.c.resolve || a.c.save) {
-					var result resourceResult
-					result, errs[i-start] = a.cachedCheck(ctx, *s, origin, i)
-					s.Status, s.FinalURL, s.Path, s.Size, s.SHA256 = result.status, result.finalURL, result.file.Path, result.file.Size, result.file.SHA256
+					s, err := a.processSource(ctx, sources[index], origin, index)
+					select {
+					case results <- sourceOutcome{index: index, source: s, err: err, ready: true}:
+					case <-ctx.Done():
+						return
+					}
 				}
-			}(i)
-		}
-		wg.Wait()
-		for i := start; i < end; i++ {
-			if errs[i-start] != nil {
-				failures = append(failures, errs[i-start])
-				results[i-start].Error = errs[i-start].Error()
-				if err := a.emit(results[i-start]); err != nil {
-					return err
-				}
-				continue
 			}
-			if err := a.emit(results[i-start]); err != nil {
+		}()
+	}
+	defer func() { cancel(); close(jobs); wg.Wait() }()
+
+	// Aliases share completed work without occupying workers. Only this goroutine
+	// accesses the outcome pointers; workers return values over the results channel.
+	slots := make([]*sourceOutcome, len(sources))
+	unique := make(map[string]*sourceOutcome)
+	next, emitted := 0, 0
+	lookahead := 4 * workers
+	var failures []error
+	for emitted < len(sources) {
+		for emitted < next && slots[emitted].ready {
+			outcome := slots[emitted]
+			s := sources[emitted]
+			s.Status, s.FinalURL = outcome.source.Status, outcome.source.FinalURL
+			s.Path, s.Size, s.SHA256 = outcome.source.Path, outcome.source.Size, outcome.source.SHA256
+			if outcome.err != nil {
+				failures = append(failures, outcome.err)
+				s.Error = outcome.err.Error()
+			}
+			if err := a.emit(s); err != nil {
 				return err
 			}
+			emitted++
+		}
+		if emitted == len(sources) {
+			break
+		}
+		var send chan int
+		var key string
+		if next < len(sources) && next-emitted < lookahead {
+			if sources[next].Kind != "inline" {
+				key = a.checkKey(sources[next], origin)
+				if shared := unique[key]; shared != nil {
+					slots[next] = shared
+					next++
+					continue
+				}
+			}
+			send = jobs
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case send <- next:
+			slot := &sourceOutcome{}
+			slots[next] = slot
+			if key != "" {
+				unique[key] = slot
+			}
+			next++
+		case result := <-results:
+			*slots[result.index] = result
 		}
 	}
 	if len(failures) > 0 {
@@ -340,12 +381,34 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 	return nil
 }
 
+type sourceOutcome struct {
+	index  int
+	source source
+	err    error
+	ready  bool
+}
+
+func (a *application) processSource(ctx context.Context, s source, origin *url.URL, index int) (source, error) {
+	if s.Kind == "inline" {
+		if a.c.save {
+			file, err := saveScript(a.c, s, strings.NewReader(s.Inline), index)
+			s.Path, s.Size, s.SHA256 = file.Path, file.Size, file.SHA256
+			return s, err
+		}
+	} else if a.c.htmlFile == "" && (a.c.resolve || a.c.save) {
+		result, err := a.cachedCheck(ctx, s, origin, index)
+		s.Status, s.FinalURL, s.Path, s.Size, s.SHA256 = result.status, result.finalURL, result.file.Path, result.file.Size, result.file.SHA256
+		return s, err
+	}
+	return s, nil
+}
+
 type scriptFailures struct{ err error }
 
 func (e *scriptFailures) Error() string { return e.err.Error() }
 func (e *scriptFailures) Unwrap() error { return e.err }
 
-func (a *application) cachedCheck(ctx context.Context, s source, origin *url.URL, index int) (resourceResult, error) {
+func (a *application) checkKey(s source, origin *url.URL) string {
 	u, _ := parseHTTPURL(s.URL)
 	key := canonicalURL(u)
 	if len(a.c.headers) > 0 {
@@ -355,6 +418,11 @@ func (a *application) cachedCheck(ctx context.Context, s source, origin *url.URL
 	if a.c.save {
 		key += "\x00" + s.Page
 	}
+	return key
+}
+
+func (a *application) cachedCheck(ctx context.Context, s source, origin *url.URL, index int) (resourceResult, error) {
+	key := a.checkKey(s, origin)
 	a.cacheMu.Lock()
 	if entry, ok := a.checks[key]; ok {
 		a.cacheMu.Unlock()

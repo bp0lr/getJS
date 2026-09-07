@@ -103,7 +103,9 @@ Get-Content pages.txt | getJS --resolve=false
 
 Blank input lines are ignored; surrounding whitespace is trimmed. Input lines are limited to 1 MiB. URLs must use HTTP or HTTPS and cannot contain embedded credentials.
 
-Pages are consumed progressively and duplicate page URLs are skipped. Script work uses bounded batches and retains document order. Plain output contains each absolute resource once; query strings remain significant. Checks are cached across pages, with separate caches for header origins. Downloads are deduplicated within each source page so page directories remain independent. Input and output must be different files.
+Pages are consumed progressively and duplicate page URLs are skipped. Continuous script workers start new tasks as soon as capacity is available, while output retains document order. Scheduling advances at most four times the worker count beyond the next output position to bound lookahead. Duplicate references share work without occupying extra workers; their metadata remains separate in JSONL.
+
+Plain output contains each absolute resource once; query strings remain significant. Checks are cached across pages, with separate caches for header origins. Downloads are deduplicated within each source page so page directories remain independent. Input and output must be different files.
 
 The HTTP client reuses connections when response bodies permit it. Checks use GET and drain at most 64 KiB; a larger body may require closing the connection. Deduplication and check caches consume memory proportional to unique URLs.
 
@@ -194,8 +196,8 @@ Compare hashes to detect content changes or identical content at different URLs.
 
 1. Identify installed versions and local Git builds automatically; prepare the first versioned release.
 2. Replace batch barriers with continuous script workers, preserving ordered output and bounded lookahead.
-3. Reuse verified downloads with conditional HTTP requests and persistent validators.
-4. Add portable file publication for destinations without hard-link support.
+3. Add portable file publication for destinations without hard-link support.
+4. Reuse verified downloads with conditional HTTP requests and persistent validators.
 5. Run the platform matrix and race detector, verify license attribution, then publish binaries and checksums.
 
 Changes are kept in separate commits. This README is the only Markdown document in the repository.
@@ -226,13 +228,13 @@ go test -run '^$' -bench 'Benchmark(Pipeline|CheckMethod)' -benchmem ./...
 
 A local synthetic sample on Go 1.27.1, Windows amd64 and Ryzen 9 3900X used a page with 16 distinct 1 KiB scripts, each referenced twice, and a 2 ms response delay. Three repetitions of three iterations produced these median batch times:
 
-| Concurrent tasks | Time | Requests |
-| --- | --- | --- |
-| 1 | 41.62 ms | 17 |
-| 4 | 21.24 ms | 17 |
-| 8 | 11.70 ms | 17 |
+| Concurrent tasks | Earlier batch implementation | Continuous workers | Requests |
+| --- | --- | --- | --- |
+| 1 | 41.62 ms | 42.37 ms | 17 |
+| 4 | 21.24 ms | 11.20 ms | 17 |
+| 8 | 11.70 ms | 7.31 ms | 17 |
 
-The per-host limit matched concurrency for the experiment; the normal default is 2. The baseline uses the corrected implementation with one task. These are small synthetic samples, not Internet speed guarantees. Allocations increased from about 253 to 259 KB/op at concurrency 1 to about 322 to 347 KB/op at concurrency 8; allocated bytes are not peak memory.
+The per-host limit matched concurrency for the experiment; the normal default is 2. These are small samples from two revisions of the same fixture, not Internet speed guarantees. Continuous workers allocated about 279 to 285 KB/op at concurrency 1 and 497 to 521 KB/op at concurrency 8; allocated bytes are not peak memory.
 
 For a separate 1 KiB fixture with 1 ms delay, HEAD with fallback took about 3.06 ms when HEAD returned 405, versus 1.56 ms for GET. GET remains the default. DOM replacement and browser execution are outside this update.
 
