@@ -14,6 +14,7 @@ import (
 )
 
 type config struct {
+	manifest                                                     string
 	htmlFile, baseURL                                            string
 	include, exclude                                             []*regexp.Regexp
 	sameOriginOnly                                               bool
@@ -56,6 +57,7 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	f.StringArrayVar(&excludes, "exclude", nil, "Exclude script URLs matching a Go regexp (repeatable, takes precedence)")
 	f.BoolVar(&c.showVersion, "version", false, "Print build version")
 	f.StringVar(&c.outputDir, "output-dir", "download", "Directory for script downloads")
+	f.StringVar(&c.manifest, "manifest", "", "Write a JSONL manifest of completed downloads (requires --save)")
 	f.Int64Var(&c.maxBody, "max-body-size", 10*1024*1024, "Maximum HTML or downloaded script size in bytes")
 	if err := f.Parse(args); err != nil {
 		return c, err == pflag.ErrHelp, err
@@ -65,6 +67,9 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	}
 	if c.showVersion {
 		return c, false, nil
+	}
+	if c.manifest != "" && !c.save {
+		return c, false, fmt.Errorf("--manifest requires --save")
 	}
 	if c.htmlFile != "" {
 		if c.url != "" || c.input != "" {

@@ -68,6 +68,7 @@ Both `--complete` and `--resolve` default to true. URL completion respects the f
 | `--include` | | None | Repeatable Go regexp; keep a URL if any inclusion pattern matches. |
 | `--exclude` | | None | Repeatable Go regexp; any exclusion match wins over inclusion. |
 | `--output-dir` | | `download` | Download destination directory. |
+| `--manifest` | | Empty | Replace a JSONL manifest of completed downloads. Requires `--save`. |
 | `--max-body-size` | | `10485760` | Maximum HTML or downloaded script bytes (10 MiB by default). |
 | `--version` | | | Print version and commit without processing input. |
 | `--insecure` | | `false` | Disable TLS certificate verification explicitly. |
@@ -151,6 +152,8 @@ getJS --input pages.txt --jsonl --save --output-dir scripts --output results.jso
 
 Each object includes `page` and `kind` (`script`, `inline`, `preload`, `modulepreload`, or `page` for a page error). External discoveries include absolute `url` and the original `reference`. Optional fields include `status`, `final_url`, `path`, `size`, and `error`.
 
+Completed downloads also include `sha256`, calculated while writing their content.
+
 JSONL preserves individual discoveries, including repeated references and their source pages, while checks and downloads remain cached. It includes inline records without embedding inline source text. Failed scripts have an error record; failed page fetches have a page error record. Diagnostics still go to stderr and partial failure still returns code 2.
 
 The `attributes` object records `type`, `async`, `defer`, `nomodule`, `integrity`, `crossorigin`, `referrerpolicy`, and link `rel`/`as` when applicable. Boolean HTML attributes use presence semantics: `async="false"` is still present. Empty `crossorigin=""` remains distinguishable from an absent attribute.
@@ -159,6 +162,16 @@ The `attributes` object records `type`, `async`, `defer`, `nomodule`, `integrity
 
 `--complete=false` changes plain-text output only; JSONL always keeps the resolved URL alongside the original reference.
 
+## Download manifest
+
+```sh
+getJS --input pages.txt --save --manifest manifest.jsonl --output-dir scripts
+```
+
+The manifest contains one object per distinct completed file: `page`, optional external `url`, `kind`, `path`, `size`, and `sha256`. Repeated tags that share a cached download produce one manifest entry. Failed downloads produce no entry. Paths are absolute when `--output-dir` is absolute; otherwise they are relative to the process working directory.
+
+Compare hashes to detect content changes or identical content at different URLs. A hash records content identity, not trust or authenticity. The manifest is replaced on each run and must differ from input and result files. An interrupted run can leave a partial manifest; already completed script files remain available.
+
 ## Scope and limitations
 
 - Reads `src` and `data-src` from script elements. Inline text is saved with `--save`.
@@ -166,7 +179,6 @@ The `attributes` object records `type`, `async`, `defer`, `nomodule`, `integrity
 - Parses returned HTML only; does not execute JavaScript or observe browser-injected scripts.
 - Ignores non-HTTP references for network operations.
 - Requires HTTP 200 for HTML and HTTP 200 or 304 for script checks. Status alone does not prove the body is JavaScript.
-- A download manifest is tracked in [PLAN.md](PLAN.md).
 
 ## Development
 

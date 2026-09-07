@@ -15,8 +15,9 @@ import (
 )
 
 type savedFile struct {
-	Path string
-	Size int64
+	Path   string
+	Size   int64
+	SHA256 string
 }
 
 func safeName(s string) string {
@@ -86,7 +87,8 @@ func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, er
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	n, copyErr := io.Copy(f, io.LimitReader(r, c.maxBody+1))
+	hash := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(f, hash), io.LimitReader(r, c.maxBody+1))
 	if n > c.maxBody {
 		copyErr = errors.Join(copyErr, fmt.Errorf("script exceeds --max-body-size (%d bytes)", c.maxBody))
 	}
@@ -110,6 +112,6 @@ func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, er
 		if err != nil {
 			return saved, fmt.Errorf("publish download (filesystem must support hard links): %w", err)
 		}
-		return savedFile{Path: filepath.Join(c.outputDir, dest), Size: n}, nil
+		return savedFile{Path: filepath.Join(c.outputDir, dest), Size: n, SHA256: fmt.Sprintf("%x", hash.Sum(nil))}, nil
 	}
 }

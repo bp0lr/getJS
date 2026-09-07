@@ -9,6 +9,7 @@ import (
 )
 
 type source struct {
+	SHA256   string          `json:"sha256,omitempty"`
 	Metadata *scriptMetadata `json:"attributes,omitempty"`
 	Position int             `json:"-"`
 	Page     string          `json:"page"`

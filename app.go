@@ -16,14 +16,16 @@ import (
 )
 
 type application struct {
-	c           config
-	client      *http.Client
-	out, errOut io.Writer
-	records     int
-	writeErr    error
-	cacheMu     sync.Mutex
-	checks      map[string]*checkEntry
-	emitted     map[string]bool
+	manifest     io.Writer
+	manifestSeen map[string]bool
+	c            config
+	client       *http.Client
+	out, errOut  io.Writer
+	records      int
+	writeErr     error
+	cacheMu      sync.Mutex
+	checks       map[string]*checkEntry
+	emitted      map[string]bool
 }
 
 type checkEntry struct {
@@ -65,6 +67,32 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "getJS: --html-file and --output must be different files")
 		return 3
 	}
+	if c.manifest != "" {
+		for _, other := range []string{c.input, c.htmlFile, c.output} {
+			if other != "" && sameFilePath(c.manifest, other) {
+				fmt.Fprintln(stderr, "getJS: --manifest must differ from input and output files")
+				return 3
+			}
+		}
+	}
+	var manifest io.Writer
+	if c.manifest != "" {
+		f, err := os.Create(c.manifest)
+		if err != nil {
+			fmt.Fprintln(stderr, "getJS: manifest:", err)
+			return 1
+		}
+		buf := bufio.NewWriter(f)
+		manifest = buf
+		defer func() {
+			if err := errors.Join(buf.Flush(), f.Close()); err != nil {
+				fmt.Fprintln(stderr, "getJS: manifest:", err)
+				if code != 130 {
+					code = 1
+				}
+			}
+		}()
+	}
 	writer := stdout
 	if c.output != "" {
 		f, err := os.Create(c.output)
@@ -77,13 +105,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		defer func() {
 			if err := errors.Join(buf.Flush(), f.Close()); err != nil {
 				fmt.Fprintln(stderr, "getJS: output:", err)
-				if code == 0 {
+				if code != 130 {
 					code = 1
 				}
 			}
 		}()
 	}
-	a := application{c: c, out: writer, errOut: stderr, checks: make(map[string]*checkEntry), emitted: make(map[string]bool)}
+	a := application{c: c, out: writer, errOut: stderr, checks: make(map[string]*checkEntry), emitted: make(map[string]bool), manifest: manifest, manifestSeen: make(map[string]bool)}
 	if c.htmlFile == "" {
 		a.client = newHTTPClient(c)
 		defer a.client.CloseIdleConnections()
@@ -282,12 +310,12 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 					if a.c.save {
 						var file savedFile
 						file, errs[i-start] = saveScript(a.c, *s, strings.NewReader(s.Inline), i)
-						s.Path, s.Size = file.Path, file.Size
+						s.Path, s.Size, s.SHA256 = file.Path, file.Size, file.SHA256
 					}
 				} else if a.c.htmlFile == "" && (a.c.resolve || a.c.save) {
 					var result resourceResult
 					result, errs[i-start] = a.cachedCheck(ctx, *s, origin, i)
-					s.Status, s.FinalURL, s.Path, s.Size = result.status, result.finalURL, result.file.Path, result.file.Size
+					s.Status, s.FinalURL, s.Path, s.Size, s.SHA256 = result.status, result.finalURL, result.file.Path, result.file.Size, result.file.SHA256
 				}
 			}(i)
 		}
@@ -378,6 +406,14 @@ func (a *application) checkScript(ctx context.Context, s source, origin *url.URL
 }
 
 func (a *application) emit(s source) error {
+	if a.manifest != nil && s.Error == "" && s.Path != "" && !a.manifestSeen[s.Path] {
+		entry := manifestEntry{Page: s.Page, URL: s.URL, Kind: s.Kind, Path: s.Path, Size: s.Size, SHA256: s.SHA256}
+		if err := json.NewEncoder(a.manifest).Encode(entry); err != nil {
+			a.writeErr = err
+			return err
+		}
+		a.manifestSeen[s.Path] = true
+	}
 	if a.c.jsonl {
 		if err := json.NewEncoder(a.out).Encode(s); err != nil {
 			a.writeErr = err
