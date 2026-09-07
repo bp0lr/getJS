@@ -68,6 +68,7 @@ func newHTTPClient(c config) *http.Client {
 					break
 				}
 			}
+			applyConditional(req)
 			return nil
 		},
 	}
@@ -132,5 +133,6 @@ func request(ctx context.Context, client *http.Client, c config, target, origin 
 			}
 		}
 	}
+	applyConditional(req)
 	return client.Do(req)
 }

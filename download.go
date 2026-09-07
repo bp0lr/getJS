@@ -44,7 +44,7 @@ func safeName(s string) string {
 
 func shortHash(s string) string { sum := sha256.Sum256([]byte(s)); return fmt.Sprintf("%x", sum[:8]) }
 
-func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, err error) {
+func saveScript(c config, s source, r io.Reader, index int, previous ...savedFile) (saved savedFile, err error) {
 	page, _ := url.Parse(s.Page)
 	host := "local"
 	if page != nil && page.Host != "" {
@@ -98,6 +98,12 @@ func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, er
 	if err := errors.Join(copyErr, f.Close()); err != nil {
 		return saved, err
 	}
+	digest := fmt.Sprintf("%x", hash.Sum(nil))
+	for _, old := range previous {
+		if old.Size == n && old.SHA256 == digest && verifiedFile(c, old) {
+			return old, nil
+		}
+	}
 	for i := 0; ; i++ {
 		candidate := name
 		if i > 0 {
@@ -111,7 +117,7 @@ func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, er
 		if err != nil {
 			return saved, fmt.Errorf("publish download: %w", err)
 		}
-		return savedFile{Path: filepath.Join(c.outputDir, dest), Size: n, SHA256: fmt.Sprintf("%x", hash.Sum(nil))}, nil
+		return savedFile{Path: filepath.Join(c.outputDir, dest), Size: n, SHA256: digest}, nil
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 )
 
 type config struct {
+	incremental                                                  bool
 	manifest                                                     string
 	htmlFile, baseURL                                            string
 	include, exclude                                             []*regexp.Regexp
@@ -58,6 +59,7 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	f.BoolVar(&c.showVersion, "version", false, "Print build version")
 	f.StringVar(&c.outputDir, "output-dir", "download", "Directory for script downloads")
 	f.StringVar(&c.manifest, "manifest", "", "Write a JSONL manifest of completed downloads (requires --save)")
+	f.BoolVar(&c.incremental, "incremental", false, "Reuse verified files from --manifest (requires --save and --manifest)")
 	f.Int64Var(&c.maxBody, "max-body-size", 10*1024*1024, "Maximum HTML or downloaded script size in bytes")
 	if err := f.Parse(args); err != nil {
 		return c, err == pflag.ErrHelp, err
@@ -70,6 +72,9 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	}
 	if c.manifest != "" && !c.save {
 		return c, false, fmt.Errorf("--manifest requires --save")
+	}
+	if c.incremental && (!c.save || c.manifest == "") {
+		return c, false, fmt.Errorf("--incremental requires --save and --manifest")
 	}
 	if c.htmlFile != "" {
 		if c.url != "" || c.input != "" {
@@ -135,6 +140,9 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 			return c, false, fmt.Errorf("invalid --header; expected Name: value")
 		}
 		c.headers.Add(name, value)
+	}
+	if c.incremental && (len(c.headers.Values("If-None-Match")) > 0 || len(c.headers.Values("If-Modified-Since")) > 0) {
+		return c, false, fmt.Errorf("--incremental manages conditional headers; remove explicit If-None-Match and If-Modified-Since headers")
 	}
 	return c, false, nil
 }

@@ -77,6 +77,7 @@ Both `--complete` and `--resolve` default to true. URL completion respects the f
 | `--exclude` | | None | Repeatable Go regexp; any exclusion match wins over inclusion. |
 | `--output-dir` | | `download` | Download destination directory. |
 | `--manifest` | | Empty | Replace a JSONL manifest of completed downloads. Requires `--save`. |
+| `--incremental` | | `false` | Reuse verified downloads from the previous manifest. Requires `--save` and `--manifest`. |
 | `--max-body-size` | | `10485760` | Maximum HTML or downloaded script bytes (10 MiB by default). |
 | `--version` | | | Print version and commit without processing input. |
 | `--insecure` | | `false` | Disable TLS certificate verification explicitly. |
@@ -162,7 +163,7 @@ getJS --input pages.txt --jsonl --save --output-dir scripts --output results.jso
 
 Each object includes `page` and `kind` (`script`, `inline`, `preload`, `modulepreload`, or `page` for a page error). External discoveries include absolute `url` and the original `reference`. Optional fields include `status`, `final_url`, `path`, `size`, and `error`.
 
-Completed downloads also include `sha256`, calculated while writing their content.
+Completed downloads also include `sha256`, calculated while writing their content. Incremental runs include `reused: true` when an existing verified file is retained; `status` still describes the actual HTTP response (200 or 304).
 
 JSONL preserves individual discoveries, including repeated references and their source pages, while checks and downloads remain cached. It includes inline records without embedding inline source text. Failed scripts have an error record; failed page fetches have a page error record. Diagnostics still go to stderr and partial failure still returns code 2.
 
@@ -178,9 +179,27 @@ The `attributes` object records `type`, `async`, `defer`, `nomodule`, `integrity
 getJS --input pages.txt --save --manifest manifest.jsonl --output-dir scripts
 ```
 
-The manifest contains one object per distinct completed file: `page`, optional external `url`, `kind`, `path`, `size`, and `sha256`. Repeated tags that share a cached download produce one manifest entry. Failed downloads produce no entry. Paths are absolute when `--output-dir` is absolute; otherwise they are relative to the process working directory.
+The manifest contains one object per distinct completed file: `page`, optional external `url`, `kind`, `path`, `size`, and `sha256`. External files also record `final_url` and, when available, `etag`, `last_modified`, and a `request_context` fingerprint. Inline files record their document `index`. Repeated tags that share a cached download produce one manifest entry. Failed downloads produce no entry. Paths are absolute when `--output-dir` is absolute; otherwise they are relative to the process working directory.
 
 Compare hashes to detect content changes or identical content at different URLs. A hash records content identity, not trust or authenticity. The manifest is replaced on each run and must differ from input and result files. An interrupted run can leave a partial manifest; already completed script files remain available.
+
+### Incremental downloads
+
+Run the same command again to update a saved collection:
+
+```sh
+getJS --input pages.txt --save --incremental --manifest manifest.jsonl --output-dir scripts
+```
+
+A missing manifest starts a new collection. Existing entries are read before any replacement. Files must remain inside the selected output directory and match the recorded size and SHA-256. Missing, changed, or oversized cached files trigger a regular download. Keep the same working directory when using relative paths.
+
+External scripts are always requested. For a verified file, getJS sends `If-None-Match` (ETag), or `If-Modified-Since` when no ETag is available. Validators follow only the previously recorded final URL, so a changed redirect target receives an unconditional request. Changes to configured headers, page origin, proxy, or TLS/origin settings invalidate conditional reuse. The manifest stores a configuration fingerprint, without header values.
+
+HTTP 304 reuses the verified local body; if that body disappears or changes during the request, getJS retries once without validators. A 200 response with identical content retains the old file, even if the server ignored validators. Changed content gets a numbered filename and preserves the previous version. Responses with `Cache-Control: no-store` or `Vary: *` do not enable subsequent conditional reuse. Explicit conditional request headers cannot be combined with `--incremental`.
+
+Inline code is reused by source page, document position, and content hash. Offline mode continues to make no network requests. Older manifests without validators still allow content comparison after a normal download.
+
+Incremental manifests are staged and replace the previous manifest only when the entire run succeeds. A failed or interrupted run preserves the old manifest; files already completed remain on disk. A later run may create another copy of files completed during a failed run because they are absent from that preserved manifest. Invalid manifests cause an error before processing. No separate cache database is created.
 
 ## Scope and limitations
 

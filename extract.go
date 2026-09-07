@@ -9,6 +9,8 @@ import (
 )
 
 type source struct {
+	cache    downloadCache
+	Reused   bool            `json:"reused,omitempty"`
 	SHA256   string          `json:"sha256,omitempty"`
 	Metadata *scriptMetadata `json:"attributes,omitempty"`
 	Position int             `json:"-"`

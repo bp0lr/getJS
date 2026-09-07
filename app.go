@@ -16,6 +16,7 @@ import (
 )
 
 type application struct {
+	previous     map[string]manifestEntry
 	manifest     io.Writer
 	manifestSeen map[string]bool
 	c            config
@@ -35,6 +36,8 @@ type checkEntry struct {
 }
 
 type resourceResult struct {
+	cache    downloadCache
+	reused   bool
 	status   int
 	finalURL string
 	file     savedFile
@@ -75,9 +78,19 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 		}
 	}
+	previous, err := readPrevious(c)
+	if err != nil {
+		fmt.Fprintln(stderr, "getJS: manifest:", err)
+		return 1
+	}
 	var manifest io.Writer
 	if c.manifest != "" {
-		f, err := os.Create(c.manifest)
+		var f *os.File
+		if c.incremental {
+			f, err = os.CreateTemp(filepath.Dir(c.manifest), ".getjs-manifest-*.tmp")
+		} else {
+			f, err = os.Create(c.manifest)
+		}
 		if err != nil {
 			fmt.Fprintln(stderr, "getJS: manifest:", err)
 			return 1
@@ -85,7 +98,20 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		buf := bufio.NewWriter(f)
 		manifest = buf
 		defer func() {
-			if err := errors.Join(buf.Flush(), f.Close()); err != nil {
+			err := buf.Flush()
+			if err == nil && c.incremental {
+				err = f.Sync()
+			}
+			err = errors.Join(err, f.Close())
+			if c.incremental {
+				if err == nil && code == 0 {
+					err = os.Rename(f.Name(), c.manifest)
+				}
+				if cleanup := os.Remove(f.Name()); cleanup != nil && !errors.Is(cleanup, os.ErrNotExist) {
+					err = errors.Join(err, cleanup)
+				}
+			}
+			if err != nil {
 				fmt.Fprintln(stderr, "getJS: manifest:", err)
 				if code != 130 {
 					code = 1
@@ -111,7 +137,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 		}()
 	}
-	a := application{c: c, out: writer, errOut: stderr, checks: make(map[string]*checkEntry), emitted: make(map[string]bool), manifest: manifest, manifestSeen: make(map[string]bool)}
+	a := application{c: c, previous: previous, out: writer, errOut: stderr, checks: make(map[string]*checkEntry), emitted: make(map[string]bool), manifest: manifest, manifestSeen: make(map[string]bool)}
 	if c.htmlFile == "" {
 		a.client = newHTTPClient(c)
 		defer a.client.CloseIdleConnections()
@@ -336,6 +362,7 @@ func (a *application) processSources(ctx context.Context, sources []source, orig
 			s := sources[emitted]
 			s.Status, s.FinalURL = outcome.source.Status, outcome.source.FinalURL
 			s.Path, s.Size, s.SHA256 = outcome.source.Path, outcome.source.Size, outcome.source.SHA256
+			s.cache, s.Reused = outcome.source.cache, outcome.source.Reused
 			if outcome.err != nil {
 				failures = append(failures, outcome.err)
 				s.Error = outcome.err.Error()
@@ -391,13 +418,16 @@ type sourceOutcome struct {
 func (a *application) processSource(ctx context.Context, s source, origin *url.URL, index int) (source, error) {
 	if s.Kind == "inline" {
 		if a.c.save {
-			file, err := saveScript(a.c, s, strings.NewReader(s.Inline), index)
+			old := a.previousFile(s).file()
+			file, err := saveScript(a.c, s, strings.NewReader(s.Inline), index, old)
 			s.Path, s.Size, s.SHA256 = file.Path, file.Size, file.SHA256
+			s.Reused = file.Path != "" && file.Path == old.Path
 			return s, err
 		}
 	} else if a.c.htmlFile == "" && (a.c.resolve || a.c.save) {
 		result, err := a.cachedCheck(ctx, s, origin, index)
 		s.Status, s.FinalURL, s.Path, s.Size, s.SHA256 = result.status, result.finalURL, result.file.Path, result.file.Size, result.file.SHA256
+		s.cache, s.Reused = result.cache, result.reused
 		return s, err
 	}
 	return s, nil
@@ -446,9 +476,39 @@ func (a *application) checkScript(ctx context.Context, s source, origin *url.URL
 		ctx = context.WithValue(ctx, originScopeKey{}, origin)
 	}
 	u, _ := parseHTTPURL(s.URL)
-	resp, err := request(ctx, a.client, a.c, u, origin)
+	old := a.previousFile(s)
+	fingerprint := requestContext(a.c, origin)
+	conditional := a.c.incremental && old.Context == fingerprint && old.FinalURL != "" && (old.ETag != "" || old.LastModified != "") && verifiedFile(a.c, old.file())
+	requestCtx := ctx
+	if conditional {
+		requestCtx = withConditional(ctx, old)
+	}
+	resp, err := request(requestCtx, a.client, a.c, u, origin)
 	if err != nil {
 		return result, err
+	}
+	if a.c.save && resp.StatusCode == http.StatusNotModified && conditional {
+		if resp.Request.URL.String() == old.FinalURL && verifiedFile(a.c, old.file()) {
+			result.status, result.finalURL, result.file, result.reused = resp.StatusCode, old.FinalURL, old.file(), true
+			result.cache = responseCache(resp, fingerprint)
+			if result.cache.Context != "" {
+				if result.cache.ETag == "" {
+					result.cache.ETag = old.ETag
+				}
+				if result.cache.LastModified == "" {
+					result.cache.LastModified = old.LastModified
+				}
+			}
+			return result, resp.Body.Close()
+		}
+		// The file or redirect target changed while requesting. Retry once without validators.
+		if err := resp.Body.Close(); err != nil {
+			return result, err
+		}
+		resp, err = request(ctx, a.client, a.c, u, origin)
+		if err != nil {
+			return result, err
+		}
 	}
 	defer resp.Body.Close()
 	result.status, result.finalURL = resp.StatusCode, resp.Request.URL.String()
@@ -462,7 +522,9 @@ func (a *application) checkScript(ctx context.Context, s source, origin *url.URL
 		if resp.StatusCode == http.StatusNotModified {
 			return result, fmt.Errorf("script %s: HTTP 304 has no body to save", s.URL)
 		}
-		result.file, err = saveScript(a.c, s, resp.Body, index)
+		result.cache = responseCache(resp, fingerprint)
+		result.file, err = saveScript(a.c, s, resp.Body, index, old.file())
+		result.reused = result.file.Path != "" && result.file.Path == old.Path
 		return result, err
 	}
 	// Bound draining so that a large script does not monopolize a worker.
@@ -475,7 +537,10 @@ func (a *application) checkScript(ctx context.Context, s source, origin *url.URL
 
 func (a *application) emit(s source) error {
 	if a.manifest != nil && s.Error == "" && s.Path != "" && !a.manifestSeen[s.Path] {
-		entry := manifestEntry{Page: s.Page, URL: s.URL, Kind: s.Kind, Path: s.Path, Size: s.Size, SHA256: s.SHA256}
+		entry := manifestEntry{Page: s.Page, URL: s.URL, Kind: s.Kind, Path: s.Path, Size: s.Size, SHA256: s.SHA256, FinalURL: s.FinalURL, downloadCache: s.cache}
+		if s.Kind == "inline" {
+			entry.Position = s.Position
+		}
 		if err := json.NewEncoder(a.manifest).Encode(entry); err != nil {
 			a.writeErr = err
 			return err
