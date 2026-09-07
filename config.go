@@ -13,6 +13,7 @@ import (
 )
 
 type config struct {
+	concurrency, perHost                                         int
 	url, input, output, proxy                                    string
 	headers                                                      http.Header
 	complete, resolve, save, follow, verbose, noColors, insecure bool
@@ -37,6 +38,8 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	f.BoolVarP(&c.noColors, "nocolors", "n", false, "Compatibility option; output is plain text")
 	f.BoolVar(&c.insecure, "insecure", false, "Disable TLS certificate verification")
 	f.DurationVar(&c.timeout, "timeout", 15*time.Second, "Maximum duration of each HTTP request")
+	f.IntVar(&c.concurrency, "concurrency", 4, "Maximum simultaneous script tasks")
+	f.IntVar(&c.perHost, "per-host", 2, "Maximum simultaneous HTTP requests per hostname")
 	if err := f.Parse(args); err != nil {
 		return c, err == pflag.ErrHelp, err
 	}
@@ -45,6 +48,9 @@ func parseConfig(args []string, stderr io.Writer) (config, bool, error) {
 	}
 	if c.timeout <= 0 {
 		return c, false, fmt.Errorf("--timeout must be positive")
+	}
+	if c.concurrency < 1 || c.concurrency > 256 || c.perHost < 1 || c.perHost > 256 {
+		return c, false, fmt.Errorf("--concurrency and --per-host must be between 1 and 256")
 	}
 	if c.resolve && !c.complete {
 		return c, false, fmt.Errorf("--resolve requires --complete=true")

@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,12 +33,15 @@ func newHTTPClient(c config) *http.Client {
 	tr.TLSHandshakeTimeout = c.timeout
 	tr.ResponseHeaderTimeout = c.timeout
 	tr.IdleConnTimeout = 30 * time.Second
+	tr.MaxIdleConns = max(32, c.concurrency*2)
+	tr.MaxIdleConnsPerHost = max(1, c.perHost)
+	tr.MaxConnsPerHost = max(1, c.perHost)
 	if c.proxy != "" {
 		p, _ := url.Parse(c.proxy) // Validated by parseConfig.
 		tr.Proxy = http.ProxyURL(p)
 	}
 	return &http.Client{
-		Transport: tr,
+		Transport: &limitedTransport{base: tr, limit: max(1, c.perHost), hosts: make(map[string]chan struct{})},
 		Timeout:   c.timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if !c.follow {
@@ -61,6 +66,51 @@ func newHTTPClient(c config) *http.Client {
 			return nil
 		},
 	}
+}
+
+// Keep the per-host limit through body consumption, also for HTTP/2 streams.
+type limitedTransport struct {
+	base  *http.Transport
+	limit int
+	mu    sync.Mutex
+	hosts map[string]chan struct{}
+}
+
+func (t *limitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	key := strings.ToLower(req.URL.Hostname())
+	t.mu.Lock()
+	sem := t.hosts[key]
+	if sem == nil {
+		sem = make(chan struct{}, t.limit)
+		t.hosts[key] = sem
+	}
+	t.mu.Unlock()
+	select {
+	case sem <- struct{}{}:
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	}
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		<-sem
+		return nil, err
+	}
+	resp.Body = &releaseBody{ReadCloser: resp.Body, release: func() { <-sem }}
+	return resp, nil
+}
+
+func (t *limitedTransport) CloseIdleConnections() { t.base.CloseIdleConnections() }
+
+type releaseBody struct {
+	io.ReadCloser
+	once    sync.Once
+	release func()
+}
+
+func (b *releaseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.release)
+	return err
 }
 
 func request(ctx context.Context, client *http.Client, c config, target, origin *url.URL) (*http.Response, error) {

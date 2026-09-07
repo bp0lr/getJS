@@ -125,7 +125,8 @@ func TestInputsAndOutput(t *testing.T) {
 	if err := os.WriteFile(input, []byte(" \nhttps://example.test/a\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pages, err := readInputs(config{input: input, url: "https://example.test/c"}, strings.NewReader("\n https://example.test/b \r\n"))
+	var pages []string
+	err := walkInputs(config{input: input, url: "https://example.test/c"}, strings.NewReader("\n https://example.test/b \r\n"), func(s string) error { pages = append(pages, s); return nil })
 	if err != nil || strings.Join(pages, ",") != "https://example.test/b,https://example.test/a,https://example.test/c" {
 		t.Fatalf("%v %v", pages, err)
 	}

@@ -59,6 +59,8 @@ Both `--complete` and `--resolve` default to true. URL completion respects the f
 | `--save` | `-s` | `false` | Download external scripts and save inline code, including with `--resolve=false`. |
 | `--follow-redirect` | `-f` | `false` | Follow redirects, with a maximum chain of 10 requests. |
 | `--timeout` | | `15s` | Positive duration for each HTTP request, including body reading. |
+| `--concurrency` | | `4` | Maximum simultaneous script tasks, from 1 to 256. |
+| `--per-host` | | `2` | Maximum active HTTP requests per hostname, including HTTP/2 streams, from 1 to 256. |
 | `--insecure` | | `false` | Disable TLS certificate verification explicitly. |
 | `--verbose` | `-v` | `false` | Write progress to stderr. |
 | `--nocolors` | `-n` | `false` | Compatibility flag; output is always plain text. |
@@ -82,6 +84,10 @@ Get-Content pages.txt | getJS --resolve=false
 ```
 
 Blank input lines are ignored; surrounding whitespace is trimmed. Input lines are limited to 1 MiB. URLs must use HTTP or HTTPS and cannot contain embedded credentials.
+
+Pages are consumed progressively and duplicate page URLs are skipped. Script work uses bounded batches and retains document order. Plain output contains each absolute resource once; query strings remain significant. Checks are cached across pages, with separate caches for header origins. Downloads are deduplicated within each source page so page directories remain independent. Input and output must be different files.
+
+The HTTP client reuses connections when response bodies permit it. Checks use GET and drain at most 64 KiB; a larger body may require closing the connection. Deduplication and check caches consume memory proportional to unique URLs. See [BENCHMARKS.md](BENCHMARKS.md) for local measurements and their limits.
 
 Results go to stdout; progress and errors go to stderr. `--output` also prints results. To suppress stdout, redirect to `/dev/null` in a POSIX shell or `$null` in PowerShell.
 
@@ -110,7 +116,7 @@ Downloads go under `download/<page-host>/`. Names are sanitized for Windows and 
 - Parses returned HTML only; does not execute JavaScript or observe browser-injected scripts.
 - Ignores non-HTTP references for network operations.
 - Requires HTTP 200 for HTML and HTTP 200 or 304 for script checks. Status alone does not prove the body is JavaScript.
-- Concurrency, deduplication, JSONL, size limits, offline HTML, and additional extraction options are tracked in [PLAN.md](PLAN.md).
+- JSONL, size limits, offline HTML, and additional extraction options are tracked in [PLAN.md](PLAN.md).
 
 ## Development
 
