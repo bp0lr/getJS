@@ -110,12 +110,12 @@ type releaseBody struct {
 	io.ReadCloser
 	once    sync.Once
 	release func()
+	err     error
 }
 
 func (b *releaseBody) Close() error {
-	err := b.ReadCloser.Close()
-	b.once.Do(b.release)
-	return err
+	b.once.Do(func() { b.err = b.ReadCloser.Close(); b.release() })
+	return b.err
 }
 
 func request(ctx context.Context, client *http.Client, c config, target, origin *url.URL) (*http.Response, error) {

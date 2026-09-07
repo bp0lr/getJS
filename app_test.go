@@ -155,3 +155,46 @@ func TestCancellation(t *testing.T) {
 		t.Fatalf("code=%d", code)
 	}
 }
+
+func TestCancellationDuringRequest(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, []string{"-u", srv.URL}, nil, io.Discard, io.Discard) }()
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not start")
+	}
+	select {
+	case code := <-done:
+		if code != 130 {
+			t.Fatalf("code=%d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("request was not cancelled")
+	}
+}
+
+func TestHTTPProxyReceivesPageRequest(t *testing.T) {
+	var calls atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "http://example.invalid/page" {
+			t.Errorf("proxy target=%s", r.URL)
+		}
+		calls.Add(1)
+		fmt.Fprint(w, "<script src='/a.js'></script>")
+	}))
+	defer proxy.Close()
+	code, out, err := invoke("-u", "http://example.invalid/page", "--proxy", proxy.URL, "--resolve=false")
+	if code != 0 || calls.Load() != 1 || out != "http://example.invalid/a.js\n" {
+		t.Fatalf("%d %q %s", code, out, err)
+	}
+}

@@ -163,3 +163,19 @@ func TestVersionWithoutInput(t *testing.T) {
 		t.Fatalf("%d %q", code, out)
 	}
 }
+
+func TestDownloadRootRejectsEscapingSymlink(t *testing.T) {
+	c := config{outputDir: t.TempDir(), maxBody: 1024}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(c.outputDir, "example.test")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	_, err := saveScript(c, source{Page: "https://example.test/page", Kind: "inline"}, strings.NewReader("content"), 0)
+	if err == nil {
+		t.Fatal("download escaped its root")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("outside modified: %v %v", entries, err)
+	}
+}
