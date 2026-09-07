@@ -104,14 +104,40 @@ func saveScript(c config, s source, r io.Reader, index int) (saved savedFile, er
 			candidate = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(name, path.Ext(name)), i, path.Ext(name))
 		}
 		dest := filepath.Join(dir, candidate)
-		// A hard link publishes complete content atomically without replacing a file.
-		err := root.Link(temp, dest)
+		err := publishDownload(root, temp, dest, root.Link)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
 		if err != nil {
-			return saved, fmt.Errorf("publish download (filesystem must support hard links): %w", err)
+			return saved, fmt.Errorf("publish download: %w", err)
 		}
 		return savedFile{Path: filepath.Join(c.outputDir, dest), Size: n, SHA256: fmt.Sprintf("%x", hash.Sum(nil))}, nil
 	}
+}
+
+// Prefer atomic publication. Exclusive copying also works on filesystems without
+// hard links; the destination is visible during the copy, but never overwritten.
+func publishDownload(root *os.Root, temp, dest string, link func(string, string) error) (err error) {
+	if err = link(temp, dest); err == nil || errors.Is(err, os.ErrExist) {
+		return err
+	}
+	in, err := root.Open(temp)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := root.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, root.Remove(dest))
+		}
+	}()
+	_, copyErr := io.Copy(out, in)
+	if copyErr == nil {
+		copyErr = out.Sync()
+	}
+	return errors.Join(copyErr, out.Close())
 }

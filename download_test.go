@@ -179,3 +179,35 @@ func TestDownloadRootRejectsEscapingSymlink(t *testing.T) {
 		t.Fatalf("outside modified: %v %v", entries, err)
 	}
 }
+
+func TestPortablePublication(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := os.WriteFile(filepath.Join(dir, "staged"), []byte("complete"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unsupported := func(string, string) error { return errors.New("hard links unsupported") }
+	if err := publishDownload(root, "staged", "final", unsupported); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := root.ReadFile("final"); err != nil || string(data) != "complete" {
+		t.Fatalf("%q %v", data, err)
+	}
+	if err := publishDownload(root, "staged", "final", unsupported); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("collision: %v", err)
+	}
+	// Reading a directory fails after exclusive creation; the failed copy must disappear.
+	if err := root.Mkdir("bad-source", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishDownload(root, "bad-source", "partial", unsupported); err == nil {
+		t.Fatal("expected failed copy")
+	}
+	if _, err := root.Stat("partial"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial left behind: %v", err)
+	}
+}

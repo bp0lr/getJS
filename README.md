@@ -150,7 +150,7 @@ Patterns use Go's regexp syntax and are compiled once. They match the full resol
 
 Downloads go under `<output-dir>/<page-host>/<page-url-hash>/`. External names include a stable URL hash, including query strings. Names are sanitized for Windows and existing files are preserved using numbered suffixes.
 
-Files are written to a temporary path, checked against the size limit, flushed, and published without replacing existing files. Publication requires filesystem hard-link support (for example NTFS, ext4, or APFS). An unsupported destination produces an explicit error. Paths are confined to the selected download root. Incomplete temporary files are cleaned up on handled failures. HTTP 304 is accepted for checks but cannot produce a download without a cached body.
+Files are written to a temporary path, checked against the size limit, flushed, and published without replacing existing files. Hard links publish complete files atomically where supported. Other filesystems use exclusive creation and copying: the destination is visible during that copy, and reported only after completion. Paths are confined to the selected download root. Temporary files and incomplete fallback copies are cleaned up on handled failures. HTTP 304 is accepted for checks but cannot produce a download without a cached body.
 
 The body limit applies to parsed HTML and saved scripts after automatic HTTP decompression. Checks reject a known oversized Content-Length but may stop after 64 KiB when the length is unknown; they do not certify the full body size. `--max-body-size` accepts an integer from 1 byte to 1 TiB.
 
