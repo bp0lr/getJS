@@ -21,7 +21,15 @@ go build -o getJS.exe .
 .\getJS.exe --help
 ```
 
-`go install .` installs into your Go binary directory, which must be on PATH. The modernization commits must reach the default branch before remote installation from that branch can use them.
+`go install .` installs into your Go binary directory, which must be on PATH.
+
+Install the default branch with:
+
+```sh
+go install github.com/bp0lr/getJS@master
+```
+
+CI builds binaries for Linux, Windows, and macOS. Download them from successful runs in [GitHub Actions](https://github.com/bp0lr/getJS/actions/workflows/ci.yml).
 
 ## Quick start
 
@@ -97,7 +105,7 @@ Blank input lines are ignored; surrounding whitespace is trimmed. Input lines ar
 
 Pages are consumed progressively and duplicate page URLs are skipped. Script work uses bounded batches and retains document order. Plain output contains each absolute resource once; query strings remain significant. Checks are cached across pages, with separate caches for header origins. Downloads are deduplicated within each source page so page directories remain independent. Input and output must be different files.
 
-The HTTP client reuses connections when response bodies permit it. Checks use GET and drain at most 64 KiB; a larger body may require closing the connection. Deduplication and check caches consume memory proportional to unique URLs. See [BENCHMARKS.md](BENCHMARKS.md) for local measurements and their limits.
+The HTTP client reuses connections when response bodies permit it. Checks use GET and drain at most 64 KiB; a larger body may require closing the connection. Deduplication and check caches consume memory proportional to unique URLs.
 
 Results go to stdout; progress and errors go to stderr. `--output` also prints results. To suppress stdout, redirect to `/dev/null` in a POSIX shell or `$null` in PowerShell.
 
@@ -188,12 +196,46 @@ go vet ./...
 go build ./...
 ```
 
-Tests use local HTTP servers, TLS fixtures, and temporary directories. See [PLAN.md](PLAN.md) for the commit sequence and acceptance criteria.
+Tests use local HTTP servers, TLS fixtures, and temporary directories. CI tests Go 1.26.0 and 1.27.1 on Linux, Windows, and macOS, and runs the race detector on Linux.
+
+Build with version information:
+
+```sh
+go build -ldflags="-X main.version=dev -X main.commit=local" .
+```
+
+### Performance measurements
+
+```sh
+go test -run '^$' -bench 'Benchmark(Pipeline|CheckMethod)' -benchmem ./...
+```
+
+A local synthetic sample on Go 1.27.1, Windows amd64 and Ryzen 9 3900X used a page with 16 distinct 1 KiB scripts, each referenced twice, and a 2 ms response delay. Three repetitions of three iterations produced these median batch times:
+
+| Concurrent tasks | Time | Requests |
+| --- | --- | --- |
+| 1 | 41.62 ms | 17 |
+| 4 | 21.24 ms | 17 |
+| 8 | 11.70 ms | 17 |
+
+The per-host limit matched concurrency for the experiment; the normal default is 2. The baseline uses the corrected implementation with one task. These are small synthetic samples, not Internet speed guarantees. Allocations increased from about 253 to 259 KB/op at concurrency 1 to about 322 to 347 KB/op at concurrency 8; allocated bytes are not peak memory.
+
+For a separate 1 KiB fixture with 1 ms delay, HEAD with fallback took about 3.06 ms when HEAD returned 405, versus 1.56 ms for GET. GET remains the default. DOM replacement and browser execution are outside this update.
+
+### Compatibility changes
+
+- TLS certificates are verified by default; `--insecure` is explicit.
+- Errors are visible on stderr and may return a nonzero exit code.
+- Plain output is deduplicated; JSONL preserves discoveries and their origin pages.
+- Downloads use portable names and preserve existing files.
+- Headers apply to same-origin scripts and are removed on origin changes.
+- `--save --resolve=false` still downloads external scripts in online mode.
+- `--nocolors` remains accepted; output uses plain text.
 
 ## Contributing and credits
 
 Use [this fork's issue tracker](https://github.com/bp0lr/getJS/issues). Include a minimal example and remove credentials from logs.
 
-The previous README declared MIT licensing; restoring a standalone license and its original attribution is tracked in the plan.
+The original README declares this project MIT-licensed. This repository does not include a separate license file.
 
 Thanks to [003random](https://github.com/003random) for the original implementation and [pczajkowski](https://github.com/pczajkowski) for credited improvements and ideas.
